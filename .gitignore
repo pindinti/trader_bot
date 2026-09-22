@@ -1,0 +1,22 @@
+# Local historical market data. Keep every pipeline stage outside Git.
+data/raw/
+data/wdo/
+data/audit/
+data/candles/
+data/explorer_storage/
+
+# Python-generated caches.
+__pycache__/
+*.py[cod]
+
+# Local environment configuration.
+.env
+.env.local
+.env.*.local
+
+# Frontend dependencies and generated output.
+node_modules/
+dist/
+
+# Legacy public candle-data location.
+explorer/public/data/

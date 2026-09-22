@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Workspace retrospectivo para pesquisa visual em candles auditados de WDO." />
+    <meta name="theme-color" content="#07130f" />
+    <title>Trade Bot Explorer</title>
+  </head>
+  <body>
+    <main id="authRoot" class="auth-home" aria-labelledby="accessTitle">
+      <header class="auth-home-brand">
+        <span class="brand-mark">TB</span>
+        <span><strong>Trade Bot</strong><small>Explorer · ambiente privado</small></span>
+      </header>
+      <section class="access-card">
+        <p class="eyebrow">Pesquisa histórica · acesso restrito</p>
+        <h1 id="accessTitle">Entre no<br /><em>Explorer.</em></h1>
+        <p id="accessDescription" class="access-description">Um ambiente privado para revisar movimentos de mercado, desenhos e análises compartilhadas entre pesquisadores autorizados.</p>
+        <div id="sessionProgress" class="session-progress" role="status">
+          <span class="loader" aria-hidden="true"></span>
+          <span>Restaurando sua sessão…</span>
+        </div>
+        <form id="loginForm" class="login-form" hidden novalidate>
+          <label class="field"><span>E-mail</span><input name="email" type="email" autocomplete="email" required placeholder="voce@exemplo.com" /></label>
+          <label class="field"><span>Senha</span><input name="password" type="password" autocomplete="current-password" required /></label>
+          <div class="auth-form-actions">
+            <button id="signInButton" class="primary" type="submit">Entrar</button>
+            <button id="recoveryRequestButton" class="text-button" type="button">Definir ou recuperar senha</button>
+          </div>
+        </form>
+        <form id="recoveryForm" class="login-form recovery-form" hidden novalidate>
+          <label class="field"><span>Nova senha</span><input name="password" type="password" autocomplete="new-password" required /></label>
+          <label class="field"><span>Confirmar nova senha</span><input name="passwordConfirmation" type="password" autocomplete="new-password" required /></label>
+          <div class="auth-form-actions">
+            <button id="updatePasswordButton" class="primary" type="submit">Salvar nova senha</button>
+            <button id="cancelRecoveryButton" class="text-button" type="button">Cancelar e sair</button>
+          </div>
+        </form>
+        <div id="accessActions" class="access-actions" hidden>
+          <button id="signOutButton" class="auth-button" type="button">Sair desta conta</button>
+        </div>
+        <p id="accessState" class="access-state" role="status"></p>
+      </section>
+      <footer class="auth-home-footer">A autenticação identifica o pesquisador; o acesso depende da lista privada de membros.</footer>
+    </main>
+    <div id="protectedRoot" hidden></div>
+    <template id="explorerTemplate">
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="Trade Bot Explorer — início"><span class="brand-mark">TB</span><span><strong>Trade Bot</strong><small>Explorer · v0.2</small></span></a>
+        <div class="topbar-actions"><div class="data-trust"><span aria-hidden="true"></span> Dados auditados</div><button id="historyButton" class="history-button" type="button" hidden>Histórico de análises</button><button id="authButton" class="auth-button" type="button">Entrar para colaborar</button></div>
+      </header>
+      <main>
+        <section class="hero" aria-labelledby="page-title">
+          <div><p class="eyebrow">Pesquisa histórica · B3</p><h1 id="page-title">Do movimento<br /><em>à hipótese.</em></h1></div>
+          <p class="hero-copy">Marque o que foi observado, preserve o contexto e registre uma hipótese verificável — sem transformar retrospectiva em sinal.</p>
+        </section>
+
+        <section class="workspace" aria-label="Workspace de pesquisa">
+          <div class="controls">
+            <div class="contract-block"><span class="control-label">Contrato</span><strong id="contractValue">—</strong><small>Mini dólar futuro</small></div>
+            <label class="field"><span class="control-label">Pregão</span><select id="dateSelect" disabled aria-label="Selecionar pregão"></select></label>
+            <fieldset class="timeframe-field"><legend class="control-label">Intervalo</legend><div id="timeframeControl" class="segment-control" aria-label="Selecionar intervalo">
+              <button type="button" data-minutes="1" aria-pressed="true">1m</button><button type="button" data-minutes="5" aria-pressed="false">5m</button><button type="button" data-minutes="10" aria-pressed="false">10m</button><button type="button" data-minutes="15" aria-pressed="false">15m</button><button type="button" data-minutes="30" aria-pressed="false">30m</button><button type="button" data-minutes="60" aria-pressed="false">60m</button>
+            </div></fieldset>
+          </div>
+
+          <div class="drawing-toolbar" aria-label="Ferramentas do gráfico">
+            <span class="toolbar-label">Ferramentas</span>
+            <div id="drawingTools" class="tool-buttons">
+              <button type="button" data-tool="navigate" aria-pressed="true" title="Navegar no gráfico">Navegar</button><button type="button" data-tool="edit" aria-pressed="false" title="Selecionar e editar desenhos">Editar</button><button type="button" data-tool="horizontal" aria-pressed="false" title="Linha horizontal">H —</button><button type="button" data-tool="trend" aria-pressed="false" title="Linha de tendência">T ／</button><button type="button" data-tool="fibonacci" aria-pressed="false" title="Retração de Fibonacci">Fib</button><button type="button" data-tool="rectangle" aria-pressed="false" title="Retângulo / zona de preço">Zona</button><button type="button" data-tool="selection" aria-pressed="false" title="Selecionar candle ou intervalo">Movimento</button>
+            </div>
+            <label id="fibConfig" class="fib-config" hidden><span>Níveis</span><input id="fibLevels" value="0, 0.236, 0.382, 0.5, 0.618, 0.786, 1" aria-label="Níveis de Fibonacci" /></label>
+            <span id="selectedDrawing" class="selected-drawing">Nenhum desenho selecionado</span><button id="deleteDrawing" class="danger-quiet" type="button" disabled>Excluir desenho</button>
+            <span id="selectionStatus" class="selection-status" data-state="requirement">Selecione um movimento e adicione ao menos um desenho</span><button id="openResearch" class="primary-small" type="button" aria-describedby="selectionStatus" title="Selecione um movimento e adicione ao menos um desenho" disabled>Nova análise</button>
+          </div>
+
+          <div id="analysisGrid" class="analysis-grid">
+            <div class="chart-column">
+              <div class="chart-header"><div><p id="chartDate" class="chart-kicker">Carregando dados…</p><h2><span id="chartContract">WDOV26</span> <span id="chartTimeframe">· 1 minuto</span></h2></div><dl class="ohlcv" aria-label="Informações do candle sob o cursor"><div><dt>O</dt><dd id="valueOpen">—</dd></div><div><dt>H</dt><dd id="valueHigh">—</dd></div><div><dt>L</dt><dd id="valueLow">—</dd></div><div><dt>C</dt><dd id="valueClose">—</dd></div><div><dt>Volume</dt><dd id="valueVolume">—</dd></div><div><dt>Negócios</dt><dd id="valueTrades">—</dd></div></dl></div>
+              <div class="chart-shell"><div id="chart" class="chart" aria-label="Gráfico interativo de candles"></div><div id="researchBand" class="research-band" aria-hidden="true"><span>Janela de pesquisa</span></div><div id="chartState" class="chart-state" role="status"><span class="loader" aria-hidden="true"></span><strong>Preparando o pregão</strong><small>Validando o conjunto exportado…</small></div></div>
+              <footer class="chart-footer"><span><i class="legend-swatch up"></i> Alta</span><span><i class="legend-swatch down"></i> Baixa</span><span><i class="legend-window"></i> Janela 10:30–15:00</span><p id="datasetNote">Fonte: candles de 1 minuto auditados localmente</p></footer>
+            </div>
+
+            <aside id="researchPanel" class="research-panel" hidden aria-label="Análise retrospectiva">
+              <header class="panel-header"><div><p class="eyebrow">Avaliação retrospectiva</p><h2 id="researchTitle">Nova análise</h2><span id="dirtyState" class="dirty-state">Sem alterações</span></div><button id="closeResearch" type="button" class="icon-button" aria-label="Fechar painel">×</button></header>
+              <div class="retrospective-warning"><strong>Retrospectiva</strong><p>O corte registra a informação que você pretende considerar. Ele não oculta candles futuros nem elimina viés retrospectivo.</p></div>
+              <form id="researchForm" novalidate>
+                <section class="form-section"><span class="section-number">01</span><div class="section-heading"><h3>Movimento</h3><p id="movementSummary">—</p></div><label class="field full"><span>Corte da análise</span><input id="analysisCutoff" name="analysisCutoff" type="datetime-local" step="1" required /></label></section>
+                <section class="form-section"><span class="section-number">02</span><div class="section-heading"><h3>Padrão identificado</h3><p>Interpretação humana, não detecção automática.</p></div><label class="field"><span>Padrão principal</span><select name="pattern" required><option value="">Selecione</option><option value="false_breakout">Falso rompimento</option><option value="pullback">Pullback</option><option value="inside_bar">Inside bar</option><option value="doji">Doji</option><option value="other">Outro / combinação</option></select></label><label class="field"><span>Direção</span><select name="direction" required><option value="">Selecione</option><option value="long">Compra</option><option value="short">Venda</option><option value="undetermined">Indeterminada</option></select></label><label class="field full"><span>Outro / combinação</span><input name="patternDetail" placeholder="Descreva quando aplicável" /></label></section>
+                <section class="form-section"><span class="section-number">03</span><div class="section-heading"><h3>Contexto de mercado</h3></div><label class="field full"><span>Contexto</span><select name="marketContext" required><option value="">Selecione</option><option value="uptrend">Tendência de alta</option><option value="downtrend">Tendência de baixa</option><option value="sideways">Lateralização</option><option value="transition">Transição / indefinido</option></select></label><label class="field full"><span>Explicação opcional</span><textarea name="contextExplanation" rows="2"></textarea></label></section>
+                <section class="form-section factor-section"><span class="section-number">04</span><div class="section-heading"><h3>Confluências e fatores</h3><p>Marcar um fator não o transforma em regra executável.</p></div><div id="factorList" class="factor-list full"></div></section>
+                <section class="form-section"><span class="section-number">05</span><div class="section-heading"><h3>Avaliação do trader</h3></div><label class="field full"><span>Decisão</span><select name="assessment" required><option value="">Selecione</option><option value="consider">Consideraria operar</option><option value="discard">Descartaria</option><option value="wait">Aguardaria confirmação</option><option value="undetermined">Indeterminada</option></select></label><label class="field full"><span>Explicação obrigatória</span><textarea name="assessmentExplanation" rows="3" required></textarea></label><label class="field full"><span>Confirmação ausente</span><textarea name="missingConfirmation" rows="2"></textarea></label><label class="field full"><span>Condições de invalidação</span><textarea name="invalidationConditions" rows="2"></textarea></label></section>
+                <section class="form-section"><span class="section-number">06</span><div class="section-heading"><h3>Regra candidata</h3><p>Status da análise, não validação automatizada.</p></div><label class="field full"><span>Regra candidata</span><textarea name="candidateRule" rows="3" placeholder="Não invente limiares ausentes na observação."></textarea></label><label class="field full"><span>Status</span><select name="researchStatus" required><option value="observation">Somente observação</option><option value="candidate">Regra candidata</option><option value="clarification">Precisa de esclarecimento</option><option value="review">Pronta para revisão de implementação</option></select></label></section>
+                <div id="formErrors" class="form-errors" role="alert" hidden></div><div class="form-actions"><button id="saveResearch" class="primary" type="submit">Salvar análise</button><button id="newResearch" type="button">Nova</button><button id="deleteResearch" class="danger-quiet" type="button" hidden>Excluir</button><span id="saveState" role="status"></span></div>
+              </form>
+              <section class="saved-section"><header><div><p class="eyebrow">Pregão atual</p><h3>Análises salvas</h3></div><button id="exportResearch" type="button" disabled>Exportar JSON</button></header><div id="savedRecords" class="saved-records"><p class="empty-copy">Entre para carregar as análises compartilhadas.</p></div></section>
+            </aside>
+          </div>
+        </section>
+
+        <section class="method-note" aria-label="Metodologia"><span>01</span><div><p class="eyebrow">Integridade</p><h2>Observação separada de regra</h2></div><p>Dados observados, interpretação do trader e hipótese de automação permanecem campos distintos. Exemplos positivos, negativos e incertos são preservados sem cálculo de P&amp;L ou alegação de rentabilidade.</p></section>
+        <p class="redistribution-note">Uso local de pesquisa. A publicação de dados históricos derivados da B3 depende de verificação prévia dos termos aplicáveis de licenciamento e redistribuição.</p>
+      </main>
+    </div>
+    <dialog id="historyDialog" class="history-dialog"><div class="history-dialog-content"><header><div><p class="eyebrow">Arquivo compartilhado</p><h2>Histórico de análises</h2></div><button id="closeHistory" class="icon-button" type="button" aria-label="Fechar histórico">×</button></header><div id="historyState" class="history-state" role="status">Carregando análises…</div><div id="historyList" class="history-list"></div></div></dialog>
+    </template>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
