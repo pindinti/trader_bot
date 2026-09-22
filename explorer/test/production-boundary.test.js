@@ -2,6 +2,15 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 
+async function readOptionalPublicFiles(directory) {
+  try {
+    return await readdir(directory, { recursive: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
 test('Vite cannot copy local candle staging into the production build', async () => {
   const config = await readFile(new URL('../vite.config.js', import.meta.url), 'utf8');
   const rootIgnore = await readFile(new URL('../../.gitignore', import.meta.url), 'utf8');
@@ -12,9 +21,14 @@ test('Vite cannot copy local candle staging into the production build', async ()
   assert.doesNotMatch(exporter, /explorer" \/ "public" \/ "data"/);
 
   const publicDirectory = new URL('../public/', import.meta.url);
-  const publicFiles = await readdir(publicDirectory, { recursive: true });
+  const publicFiles = await readOptionalPublicFiles(publicDirectory);
   assert.equal(publicFiles.some((path) => /(?:^|[\\/])manifest\.json$/.test(path)), false);
   assert.equal(publicFiles.some((path) => /WDOV26[\\/].+\.json$/.test(path)), false);
+});
+
+test('a missing public directory is treated as empty', async () => {
+  const missingDirectory = new URL('../public/.directory-that-is-not-present/', import.meta.url);
+  assert.deepEqual(await readOptionalPublicFiles(missingDirectory), []);
 });
 
 test('Pages deployment uses the project base and public repository variables', async () => {
