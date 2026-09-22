@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { performPasswordRecovery, performPasswordSignIn, performPasswordUpdate } from './auth-operations.js';
+import { resolveApplicationUrl } from './auth-callback.js';
 import { downloadPrivateJson } from './candle-storage.js';
 import { fromDatabaseRecord, toDatabaseRecord } from './research.js';
 
@@ -23,7 +24,7 @@ export function signInWithPassword(email, password) {
 }
 
 export function requestPasswordRecovery(email) {
-  const redirectTo = new URL('.', window.location.href).href;
+  const redirectTo = resolveApplicationUrl(window.location.origin, import.meta.env.BASE_URL);
   return performPasswordRecovery(getSupabase().auth, email, redirectTo);
 }
 

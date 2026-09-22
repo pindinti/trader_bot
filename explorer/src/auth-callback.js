@@ -1,5 +1,12 @@
 const CALLBACK_KEYS = ['code', 'error', 'error_code', 'error_description', 'type'];
 
+export function resolveApplicationUrl(origin, basePath) {
+  if (typeof basePath !== 'string' || !basePath.startsWith('/') || !basePath.endsWith('/')) {
+    throw new TypeError('Invalid application base path.');
+  }
+  return new URL(basePath, `${new URL(origin).origin}/`).href;
+}
+
 export function inspectAuthCallback(url) {
   const parsed = new URL(url);
   const query = parsed.searchParams;

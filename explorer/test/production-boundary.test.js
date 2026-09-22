@@ -16,3 +16,14 @@ test('Vite cannot copy local candle staging into the production build', async ()
   assert.equal(publicFiles.some((path) => /(?:^|[\\/])manifest\.json$/.test(path)), false);
   assert.equal(publicFiles.some((path) => /WDOV26[\\/].+\.json$/.test(path)), false);
 });
+
+test('Pages deployment uses the project base and public repository variables', async () => {
+  const config = await readFile(new URL('../vite.config.js', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url), 'utf8');
+
+  assert.match(config, /mode === 'production' \? '\/trader_bot\/' : '\/'/);
+  assert.match(workflow, /VITE_SUPABASE_URL:\s*\$\{\{\s*vars\.VITE_SUPABASE_URL\s*\}\}/);
+  assert.match(workflow, /VITE_SUPABASE_PUBLISHABLE_KEY:\s*\$\{\{\s*vars\.VITE_SUPABASE_PUBLISHABLE_KEY\s*\}\}/);
+  assert.match(workflow, /path:\s*\.\/explorer\/dist/);
+  assert.doesNotMatch(workflow, /service[_-]?role|sb_secret_|secrets\.VITE_SUPABASE/i);
+});

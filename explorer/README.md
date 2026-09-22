@@ -144,6 +144,24 @@ Frontend tests cover aggregation, drawing serialization and hit geometry, Fibona
 
 ## Deployment boundary
 
-No deployment is performed in v0.2. Public deployment of the application and any distribution of B3-derived history remain pending verification of applicable licensing and redistribution terms. Never publish `data/raw/`, `data/wdo/`, `data/audit/`, or `data/explorer_storage/`.
+The repository includes a GitHub Pages workflow, but no deployment is performed merely by building locally. Public deployment of the application and any distribution of B3-derived history remain pending verification of applicable licensing and redistribution terms. Never publish `data/raw/`, `data/wdo/`, `data/audit/`, `data/candles/`, or `data/explorer_storage/`.
 
 The static application bundle contains no candle manifest or daily candle JSON. Authorized browsers retrieve those objects through the authenticated Supabase Storage download endpoint, where Storage RLS makes the final access decision. The publishable key remains appropriate for the browser; never add a service-role key, secret key, database password, or Storage administration credential to frontend environment variables.
+
+### GitHub Pages configuration
+
+The project site is built for `https://pindinti.github.io/trader_bot/`. Development mode keeps Vite's `/` base so `npm run dev` continues to use `http://localhost:5173/`; production builds use `/trader_bot/`.
+
+In **GitHub → Settings → Pages**, select **GitHub Actions** as the build source. In **Settings → Secrets and variables → Actions → Variables**, create these repository variables using the same browser-safe values as the local `.env.local`:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+
+Do not create service-role or secret-key variables for this workflow. The workflow fails before building when either required public variable is empty.
+
+In **Supabase → Authentication → URL Configuration**, set:
+
+- Site URL: `https://pindinti.github.io/trader_bot/`
+- Redirect URLs: `https://pindinti.github.io/trader_bot/` and `http://localhost:5173/`
+
+The recovery redirect is derived from Vite's application base, so production callbacks return to `/trader_bot/` and local callbacks return to `/`. After the first deployment, manually verify session restoration, password recovery, membership denial, authorized private-candle loading, and sign-out at the production URL.
