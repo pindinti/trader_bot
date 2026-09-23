@@ -2,7 +2,7 @@
 
 A local-first visual research workspace for audited WDO candles. Researchers can draw price references, select a historical movement, write a structured retrospective assessment, and share records through an explicitly authorized Supabase project.
 
-This is research tooling—not signal generation, strategy validation, replay, backtesting, execution, or evidence of profitability.
+This is research tooling—not signal generation, strategy validation, backtesting, execution, or evidence of profitability.
 
 ## Run locally
 
@@ -81,6 +81,20 @@ Fibonacci uses `price = anchor1 + (anchor2 - anchor1) × level`. Reversing the a
 
 Drawing tools are one-shot and return to Navigate mode after completion. Edit mode deliberately captures pointer input so anchors or the whole drawing can be dragged; return to Navigate mode for chart pan/zoom. Escape cancels unfinished work and returns to navigation.
 
+## Candle replay
+
+Replay starts at the first available 1-minute candle. Manual navigation and playback then advance to the next completed candle boundary for the selected chart timeframe: every source candle at 1m, or the clock-aligned completion boundary at 5m, 10m, 15m, 30m, and 60m. The chart always receives only the audited 1-minute prefix through the simulated timestamp. Higher timeframes display only completed buckets; no partial final bucket is presented as complete.
+
+Switching from a shorter timeframe at a non-aligned replay position pauses playback and rewinds the simulated clock to the latest completed boundary of the new timeframe. If that session has no earlier completed boundary, it returns to the first source candle. This deterministic rewind prevents future leakage and makes Previous/Next symmetric on the new timeframe. When the remaining session contains no further completed bucket, Next and Play are disabled; switching to a shorter timeframe can still traverse the remaining 1-minute data.
+
+Replay updates preserve the current logical viewport, including manual pan and zoom. When the timeframe changes, the visible logical range is reprojected through wall-clock time so empty future whitespace and timestamp/price drawing anchors keep the same intended screen positions. Entering replay may establish a new initial viewport, and leaving it fits the full day again. Drawings remain timestamp/price annotations with drawing schema version `1`; replay never fabricates market candles or exposes drawings through `getMarketView()`.
+
+The replay controller exposes `getMarketView()` as a small read-only interface for future detectors: `{ active, simulatedTimestamp, candles }`. Candle objects and the returned prefix are frozen copies. This interface is intentionally not a detector registry, signal API, or backtesting framework.
+
+Playback uses a fixed local speed of one completed chart-timeframe candle every 700 ms and pauses at the end. It is also stopped and reset on timeframe or day changes, protected-app teardown, and sign-out. Opening a saved analysis exits replay before restoring its recorded chart state.
+
+Analyses created while replay is active are saved explicitly as **Análise em replay**, with the simulated timestamp, selected timeframe, and source position captured together after playback is paused. Opening one restores the same audited 1-minute prefix and never loads later candles into the chart. Existing records and analyses created with the complete day remain **Análise retrospectiva**. Replay is a research context, not a claim that the researcher had never previously seen the complete session.
+
 ## Retrospective research records
 
 Movement selection snaps to displayed candle timestamps; drawings do not. A click selects one candle and a drag selects an interval. Records separate:
@@ -107,7 +121,7 @@ Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Never use a ser
 
 1. In Supabase Authentication → Providers, keep the Email provider enabled with password authentication. The Explorer does not call public sign-up; if accounts are provisioned separately, disable new-user sign-ups in the Dashboard as an additional safeguard.
 2. Set the local Site URL or add `http://localhost:5173/` to the permitted Redirect URLs so password-recovery links can return to the Explorer. Add the final GitHub Pages project URL only after redistribution and deployment approval.
-3. Review and run [the research migration](supabase/migrations/202609220001_research_annotations.sql), followed by [the private candle Storage migration](supabase/migrations/202609220002_private_candle_storage.sql), in the Supabase SQL editor.
+3. Review and run [the research migration](supabase/migrations/202609220001_research_annotations.sql), followed by [the private candle Storage migration](supabase/migrations/202609220002_private_candle_storage.sql), in the Supabase SQL editor. For replay analyses, then manually apply [the additive replay-analysis migration](supabase/migrations/202609230001_replay_analyses.sql). Existing rows receive the `retrospective` default; the migration does not change grants or RLS policies.
 4. Existing magic-link users should sign out, enter the same email address, and choose **Definir ou recuperar senha**. The recovery link updates that existing `auth.users` identity; it does not create a second account, change its user ID, or replace its `research_members` row.
 5. New accounts must be provisioned through an explicitly controlled Supabase administration workflow before they can request recovery. Then add only the intended identities to `research_members` using the reviewed SQL at the bottom of the migration.
 6. Review the project password policy and recovery-email template in the Dashboard. The Supabase policy remains authoritative; the frontend only confirms that both entered passwords match.
@@ -140,7 +154,7 @@ npm test
 npm run build
 ```
 
-Frontend tests cover aggregation, drawing serialization and hit geometry, Fibonacci direction/calculation, research validation and database mapping, JSON export, authenticated Storage loading/error handling, production asset exclusion, and required RLS migration clauses.
+Frontend tests cover aggregation, deterministic replay boundaries and prefix isolation, drawing serialization and hit geometry, Fibonacci direction/calculation, research validation and database mapping, JSON export, authenticated Storage loading/error handling, production asset exclusion, and required RLS migration clauses.
 
 ## Deployment boundary
 

@@ -83,6 +83,18 @@ select { width: 100%; padding: 10px 34px 10px 0; border: 0; border-bottom: 1px s
 .segment-control button:hover { color: #e9f2ec; border-color: #284035; }
 .segment-control button[aria-pressed="true"] { color: #0c160f; background: var(--lime); border-color: var(--lime); }
 
+.replay-toolbar { min-height: 58px; display: flex; align-items: center; gap: 18px; padding: 9px 16px; border-bottom: 1px solid var(--line); background: #0b1a13; }
+.replay-heading { display: flex; align-items: center; gap: 10px; }
+.replay-toggle, .replay-transport button { min-height: 32px; padding: 7px 11px; border: 1px solid #345143; color: #b8c8bf; background: #0d2118; cursor: pointer; font: 500 10px DM Mono, monospace; }
+.replay-toggle:hover, .replay-transport button:not(:disabled):hover { border-color: var(--lime); color: #e5eead; }
+.replay-toggle[aria-pressed="true"] { border-color: #9eb642; color: #0b160e; background: var(--lime); font-weight: 700; }
+.replay-transport { display: flex; gap: 3px; }
+.replay-transport button:first-child, .replay-transport button:last-child { min-width: 36px; font-size: 15px; }
+.replay-clock { display: grid; grid-template-columns: auto auto; gap: 2px 12px; align-items: baseline; margin-left: auto; font-family: DM Mono, monospace; }
+.replay-clock span { grid-column: 1 / -1; color: #657b6f; font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
+.replay-clock strong { color: #d8e4dd; font-size: 11px; font-weight: 500; }
+.replay-clock small { color: #80958a; font-size: 9px; }
+
 .drawing-toolbar { min-height: 54px; display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: #08150f; overflow-x: auto; }
 .toolbar-label { margin-right: 4px; color: #61776b; font: 500 8px DM Mono, monospace; letter-spacing: .14em; text-transform: uppercase; }
 .tool-buttons { display: flex; gap: 3px; }
@@ -242,6 +254,9 @@ button:disabled { opacity: .38; cursor: not-allowed; }
   .timeframe-field { grid-column: auto; overflow-x: auto; }
   .segment-control { display: flex; min-width: 350px; }
   .segment-control button { flex: 1; }
+  .replay-toolbar { align-items: flex-start; flex-wrap: wrap; gap: 9px 14px; }
+  .replay-heading { flex: 1 1 auto; }
+  .replay-clock { width: 100%; margin-left: 0; }
   .chart-header { padding: 20px; }
   .ohlcv { grid-template-columns: repeat(3, 1fr); row-gap: 12px; }
   .chart-shell { height: 480px; }

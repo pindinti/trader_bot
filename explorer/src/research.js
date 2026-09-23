@@ -7,12 +7,30 @@ export const MARKET_CONTEXTS = Object.freeze(['uptrend', 'downtrend', 'sideways'
 export const FACTOR_ROLES = Object.freeze(['required', 'supporting', 'disqualifying', 'undetermined']);
 export const ASSESSMENTS = Object.freeze(['consider', 'discard', 'wait', 'undetermined']);
 export const RESEARCH_STATUSES = Object.freeze(['observation', 'candidate', 'clarification', 'review']);
+export const ANALYSIS_TYPES = Object.freeze(['retrospective', 'replay']);
 export const FACTOR_TYPES = Object.freeze(['vwap', 'ma21', 'ma200', 'fibonacci', 'support_resistance', 'higher_timeframe', 'candlestick', 'volume', 'other']);
 
 const isText = (value) => typeof value === 'string';
 const requiredText = (value, label, errors) => {
   if (!isText(value) || !value.trim()) errors.push(`${label} is required`);
 };
+
+export function captureAnalysisContext(replay) {
+  if (!replay?.pause || !replay?.getState) throw new TypeError('Replay state is unavailable');
+  replay.pause();
+  const snapshot = replay.getState();
+  return Object.freeze(snapshot.active
+    ? {
+      analysisType: 'replay',
+      replayTimestamp: snapshot.simulatedTimestamp,
+      replayPosition: snapshot.position,
+    }
+    : {
+      analysisType: 'retrospective',
+      replayTimestamp: null,
+      replayPosition: null,
+    });
+}
 
 export function researchFormDatetimeToTimestamp(value) {
   const text = String(value ?? '').trim();
@@ -36,6 +54,7 @@ export function researchFormDatetimeToTimestamp(value) {
 
 export function validateResearchDraft(draft) {
   const errors = [];
+  const analysisType = draft?.analysisType ?? 'retrospective';
   if (draft?.schemaVersion !== RESEARCH_SCHEMA_VERSION) errors.push('Unsupported research schema version');
   requiredText(draft?.contract, 'Contract', errors);
   requiredText(draft?.tradingDate, 'Trading date', errors);
@@ -45,6 +64,17 @@ export function validateResearchDraft(draft) {
   }
   if (!Number.isFinite(draft?.analysisCutoffTimestamp) || draft.analysisCutoffTimestamp < draft.startTimestamp) {
     errors.push('Analysis cutoff must not precede the selected movement');
+  }
+  if (!ANALYSIS_TYPES.includes(analysisType)) errors.push('Analysis type is invalid');
+  if (analysisType === 'replay') {
+    if (!Number.isFinite(draft?.replayTimestamp)) errors.push('Replay timestamp is required');
+    if (!Number.isInteger(draft?.replayPosition) || draft.replayPosition < 0) errors.push('Replay position is required');
+    if (Number.isFinite(draft?.replayTimestamp)
+      && (draft.endTimestamp > draft.replayTimestamp || draft.analysisCutoffTimestamp > draft.replayTimestamp)) {
+      errors.push('Replay analysis cannot include a movement or cutoff beyond its snapshot');
+    }
+  } else if (draft?.replayTimestamp != null || draft?.replayPosition != null) {
+    errors.push('Retrospective analysis cannot contain replay metadata');
   }
   if (!PATTERNS.includes(draft?.pattern)) errors.push('Primary pattern is required');
   if (draft?.pattern === 'other') requiredText(draft.patternDetail, 'Other pattern detail', errors);
@@ -79,6 +109,9 @@ export function normalizeResearchDraft(draft) {
     startTimestamp: Math.round(draft.startTimestamp),
     endTimestamp: Math.round(draft.endTimestamp),
     analysisCutoffTimestamp: Math.round(draft.analysisCutoffTimestamp),
+    analysisType: draft.analysisType ?? 'retrospective',
+    replayTimestamp: draft.replayTimestamp == null ? null : Math.round(draft.replayTimestamp),
+    replayPosition: draft.replayPosition == null ? null : Number(draft.replayPosition),
     pattern: draft.pattern,
     patternDetail: String(draft.patternDetail ?? '').trim(),
     direction: draft.direction,
@@ -113,6 +146,9 @@ export function toDatabaseRecord(draft) {
     start_timestamp: item.startTimestamp,
     end_timestamp: item.endTimestamp,
     analysis_cutoff_timestamp: item.analysisCutoffTimestamp,
+    analysis_type: item.analysisType,
+    replay_timestamp: item.replayTimestamp,
+    replay_position: item.replayPosition,
     pattern: item.pattern,
     pattern_detail: item.patternDetail,
     direction: item.direction,
@@ -143,6 +179,9 @@ export function fromDatabaseRecord(record) {
     startTimestamp: Number(record.start_timestamp),
     endTimestamp: Number(record.end_timestamp),
     analysisCutoffTimestamp: Number(record.analysis_cutoff_timestamp),
+    analysisType: record.analysis_type ?? 'retrospective',
+    replayTimestamp: record.replay_timestamp == null ? null : Number(record.replay_timestamp),
+    replayPosition: record.replay_position == null ? null : Number(record.replay_position),
     pattern: record.pattern,
     patternDetail: record.pattern_detail ?? '',
     direction: record.direction,

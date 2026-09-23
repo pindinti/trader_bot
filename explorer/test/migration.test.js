@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const migrationUrl = new URL('../supabase/migrations/202609220001_research_annotations.sql', import.meta.url);
+const replayMigrationUrl = new URL('../supabase/migrations/202609230001_replay_analyses.sql', import.meta.url);
 
 test('Supabase migration enables RLS and keeps drawings owned by their annotation', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -14,4 +15,16 @@ test('Supabase migration enables RLS and keeps drawings owned by their annotatio
   assert.match(sql, /author_id = \(select auth\.uid\(\)\)/i);
   assert.match(sql, /drawings jsonb not null/i);
   assert.match(sql, /revoke all on public\.research_annotations from anon/i);
+});
+
+test('replay analysis migration is additive and preserves existing authorization', async () => {
+  const sql = await readFile(replayMigrationUrl, 'utf8');
+  assert.match(sql, /add column if not exists analysis_type text not null default 'retrospective'/i);
+  assert.match(sql, /add column if not exists replay_timestamp bigint/i);
+  assert.match(sql, /add column if not exists replay_position integer/i);
+  assert.match(sql, /analysis_type = 'replay'/i);
+  assert.match(sql, /replay_timestamp is not null/i);
+  assert.match(sql, /replay_position is not null/i);
+  assert.match(sql, /replay_timestamp >= end_timestamp/i);
+  assert.doesNotMatch(sql, /create policy|drop policy|grant .*research_annotations|revoke .*research_annotations/i);
 });

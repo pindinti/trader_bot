@@ -3,8 +3,10 @@ import { createMarketChart } from './chart.js';
 import { parseDayPayload, validateManifest, wallClockToTimestamp } from './data.js';
 import { parseFibonacciLevels } from './drawings.js';
 import { buildAnalysisRestorePlan, canAccessAnalysisHistory, canCreateAnalysis } from './history.js';
+import { aggregateCompletedReplayCandles, createCandleReplay } from './replay.js';
 import {
   RESEARCH_SCHEMA_VERSION,
+  captureAnalysisContext,
   exportResearchRecords,
   researchFormDatetimeToTimestamp,
   validateResearchDraft,
@@ -28,10 +30,13 @@ const elements = Object.fromEntries([
   'chartState', 'researchBand', 'datasetNote', 'valueOpen', 'valueHigh', 'valueLow', 'valueClose',
   'valueVolume', 'valueTrades', 'drawingTools', 'fibConfig', 'fibLevels', 'selectedDrawing',
   'deleteDrawing', 'selectionStatus', 'openResearch', 'analysisGrid', 'researchPanel', 'researchTitle',
+  'researchKind', 'researchWarningTitle', 'researchWarningText',
   'dirtyState', 'closeResearch', 'researchForm', 'movementSummary', 'analysisCutoff', 'factorList',
   'formErrors', 'saveResearch', 'newResearch', 'deleteResearch', 'saveState', 'savedRecords',
   'exportResearch', 'authButton', 'historyButton',
   'historyDialog', 'closeHistory', 'historyState', 'historyList',
+  'replayToggle', 'replayPrevious', 'replayPlay', 'replayPause', 'replayNext',
+  'replayTimestamp', 'replayPosition',
 ].map((id) => [id, mount.querySelector(`#${id}`)]));
 
 const FACTORS = [
@@ -67,6 +72,10 @@ const state = {
   suppressDirty: false,
 };
 let active = true;
+let loadingDay = false;
+let replayWasActive = false;
+let restoringAnalysis = false;
+let preserveTimeRangeOnce = false;
 
 function showChartState(kind, title, detail) {
   elements.chartState.className = `chart-state ${kind}`;
@@ -123,6 +132,8 @@ const chart = createMarketChart(mount.querySelector('#chart'), elements.research
   },
 });
 
+const replay = createCandleReplay({ onChange: handleReplayChange });
+
 function researchWindow(day) {
   return { start: wallClockToTimestamp(`${day} 10:30:00`), end: wallClockToTimestamp(`${day} 15:00:00`) };
 }
@@ -138,6 +149,44 @@ function inputToTimestamp(value) {
 function formatTimestamp(timestamp) {
   const value = new Date(timestamp * 1000).toISOString();
   return `${value.slice(11, 16)}`;
+}
+
+function formatReplayTimestamp(timestamp) {
+  if (!Number.isFinite(timestamp)) return '—';
+  return new Date(timestamp * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+function formatTradingDate(day) {
+  return String(day).split('-').reverse().join('/');
+}
+
+function renderReplayControls() {
+  const replayState = replay.getState();
+  const editingAnalysis = !elements.researchPanel.hidden;
+  elements.replayToggle.textContent = replayState.active ? 'Sair do replay' : 'Iniciar replay';
+  elements.replayToggle.setAttribute('aria-pressed', String(replayState.active));
+  elements.replayToggle.disabled = editingAnalysis;
+  elements.replayPrevious.disabled = editingAnalysis || !replayState.active || replayState.atStart;
+  elements.replayNext.disabled = editingAnalysis || !replayState.active || replayState.atEnd;
+  elements.replayPlay.disabled = editingAnalysis || !replayState.active || replayState.playing || replayState.atEnd;
+  elements.replayPause.disabled = editingAnalysis || !replayState.active || !replayState.playing;
+  elements.replayTimestamp.textContent = formatReplayTimestamp(replayState.simulatedTimestamp);
+  elements.replayPosition.textContent = replayState.active
+    ? `${replayState.position + 1} / ${replayState.total}`
+    : 'Dados completos';
+}
+
+function handleReplayChange(replayState = replay.getState()) {
+  renderReplayControls();
+  if (!loadingDay && !restoringAnalysis && state.currentDate && state.baseCandles.length) {
+    const enteringReplay = replayState.active && !replayWasActive;
+    const preserveViewport = preserveTimeRangeOnce
+      ? 'time'
+      : (replayState.active && !enteringReplay ? 'logical' : false);
+    renderTimeframe({ preserveViewport });
+  }
+  preserveTimeRangeOnce = false;
+  replayWasActive = replayState.active;
 }
 
 function renderSelection() {
@@ -165,17 +214,34 @@ function renderSelection() {
   elements.selectionStatus.textContent = `${text} · ${drawings.length} desenho${drawings.length === 1 ? '' : 's'}`;
   elements.selectionStatus.dataset.state = 'selected';
   elements.openResearch.disabled = false;
-  elements.openResearch.title = 'Criar uma análise retrospectiva deste movimento';
+  elements.openResearch.title = replay.getState().active
+    ? 'Criar uma análise em replay deste movimento'
+    : 'Criar uma análise retrospectiva deste movimento';
 }
 
-function renderTimeframe() {
-  state.candles = aggregateCandles(state.baseCandles, state.timeframe);
+function renderTimeframe({ preserveViewport = replay.getState().active ? 'logical' : false } = {}) {
+  const marketView = replay.getMarketView();
+  state.candles = marketView.active
+    ? aggregateCompletedReplayCandles(
+      marketView.candles,
+      state.timeframe,
+      marketView.simulatedTimestamp,
+    )
+    : aggregateCandles(state.baseCandles, state.timeframe);
   elements.chartTimeframe.textContent = `· ${state.timeframe} minuto${state.timeframe === 1 ? '' : 's'}`;
-  elements.datasetNote.textContent = `${state.candles.length} candles · base auditada de 1 minuto`;
-  chart.setData(state.candles, researchWindow(state.currentDate));
+  elements.datasetNote.textContent = marketView.active
+    ? `${marketView.candles.length} de ${state.baseCandles.length} candles de 1 minuto · buckets completos`
+    : `${state.candles.length} candles · base auditada de 1 minuto`;
+  chart.setData(state.candles, researchWindow(state.currentDate), {
+    preserveViewport,
+    sourceIntervalSeconds: state.timeframe * 60,
+  });
   renderInfo();
   renderSelection();
   if (state.candles.length) elements.chartState.hidden = true;
+  else if (marketView.active && state.timeframe > 1) {
+    showChartState('empty', 'Aguardando candle completo', `Avance o replay até fechar o primeiro candle de ${state.timeframe} minutos.`);
+  }
   else showChartState('empty', 'Nenhum candle disponível', 'O arquivo selecionado não contém dados para exibir.');
 }
 
@@ -193,7 +259,11 @@ function confirmDiscard() {
   return !state.dirty || window.confirm('Descartar as alterações não salvas desta análise?');
 }
 
-async function loadDay(day, { preserveResearch = false } = {}) {
+async function loadDay(day, { preserveResearch = false, replayContext = null } = {}) {
+  loadingDay = true;
+  state.baseCandles = [];
+  state.candles = [];
+  replay.load([]);
   showChartState('loading', 'Carregando o pregão', 'Lendo somente candles exportados e auditados…');
   elements.dateSelect.disabled = true;
   try {
@@ -203,6 +273,8 @@ async function loadDay(day, { preserveResearch = false } = {}) {
     if (!active) return;
     state.baseCandles = parseDayPayload(payload, state.contract, day);
     state.currentDate = day;
+    replay.load(state.baseCandles);
+    if (replayContext) replay.restore(replayContext);
     elements.chartDate.textContent = dateLabel.format(new Date(`${day}T00:00:00Z`));
     if (!preserveResearch) clearActiveResearch();
     renderTimeframe();
@@ -210,9 +282,12 @@ async function loadDay(day, { preserveResearch = false } = {}) {
   } catch (error) {
     state.baseCandles = [];
     state.candles = [];
+    replay.load([]);
     renderInfo(null);
     showChartState('error', 'Não foi possível abrir os dados', error.message || 'Erro inesperado.');
   } finally {
+    loadingDay = false;
+    renderReplayControls();
     elements.dateSelect.disabled = false;
   }
 }
@@ -286,16 +361,29 @@ function resetForm() {
   elements.formErrors.hidden = true;
   elements.saveState.textContent = '';
   elements.researchTitle.textContent = 'Nova análise';
+  renderAnalysisType(replay.getState().active ? 'replay' : 'retrospective');
   elements.deleteResearch.hidden = true;
   state.suppressDirty = false;
 }
 
+function renderAnalysisType(analysisType) {
+  const isReplay = analysisType === 'replay';
+  elements.researchKind.textContent = isReplay ? 'Análise em replay' : 'Análise retrospectiva';
+  elements.researchPanel.setAttribute('aria-label', elements.researchKind.textContent);
+  elements.researchWarningTitle.textContent = isReplay ? 'Replay' : 'Retrospectiva';
+  elements.researchWarningText.textContent = isReplay
+    ? 'O registro preserva o timestamp simulado e o prefixo de mercado disponível no momento do salvamento.'
+    : 'O corte registra a informação que você pretende considerar. Ele não oculta candles futuros nem elimina viés retrospectivo.';
+}
+
 function showResearchPanel() {
   if (!state.selection) return;
+  replay.pause();
   elements.researchPanel.hidden = false;
   elements.analysisGrid.classList.add('panel-open');
   renderSelection();
   if (!elements.analysisCutoff.value) elements.analysisCutoff.value = timestampToInput(state.selection.endTimestamp);
+  renderReplayControls();
 }
 
 function closeResearchPanel() {
@@ -303,9 +391,10 @@ function closeResearchPanel() {
   elements.researchPanel.hidden = true;
   elements.analysisGrid.classList.remove('panel-open');
   markClean();
+  renderReplayControls();
 }
 
-function collectDraft() {
+function collectDraft(analysisContext) {
   const form = elements.researchForm.elements;
   return {
     schemaVersion: RESEARCH_SCHEMA_VERSION,
@@ -315,6 +404,7 @@ function collectDraft() {
     startTimestamp: state.selection?.startTimestamp,
     endTimestamp: state.selection?.endTimestamp,
     analysisCutoffTimestamp: inputToTimestamp(form.analysisCutoff.value),
+    ...analysisContext,
     pattern: form.pattern.value,
     patternDetail: form.patternDetail.value,
     direction: form.direction.value,
@@ -352,6 +442,7 @@ function populateForm(record) {
   form.candidateRule.value = record.candidateRule;
   form.researchStatus.value = record.researchStatus;
   renderFactorList(record.factors);
+  renderAnalysisType(record.analysisType);
   elements.researchTitle.textContent = PATTERN_LABELS[record.pattern] ?? 'Análise';
   elements.deleteResearch.hidden = record.authorId !== state.session?.user.id;
   const own = record.authorId === state.session?.user.id;
@@ -366,16 +457,24 @@ async function openRecord(record) {
   if (!confirmDiscard()) return false;
   try {
     const plan = buildAnalysisRestorePlan(record, state.dates.map(({ date }) => date));
+    replay.pause();
+    restoringAnalysis = true;
     state.currentRecordId = record.id;
     chart.setMode('navigate');
-    if (plan.tradingDate !== state.currentDate) {
-      elements.dateSelect.value = plan.tradingDate;
-      await loadDay(plan.tradingDate, { preserveResearch: true });
-      if (!active) return false;
-      if (state.currentDate !== plan.tradingDate) throw new Error('Não foi possível carregar o pregão desta análise.');
-    }
     state.timeframe = plan.timeframeMinutes;
     elements.timeframeControl.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.minutes) === state.timeframe)));
+    replay.setStepMinutes(state.timeframe);
+    if (plan.tradingDate !== state.currentDate) {
+      elements.dateSelect.value = plan.tradingDate;
+      await loadDay(plan.tradingDate, { preserveResearch: true, replayContext: plan.replay });
+      if (!active) return false;
+      if (state.currentDate !== plan.tradingDate || !state.baseCandles.length) throw new Error('Não foi possível carregar o pregão desta análise.');
+    } else if (plan.replay) {
+      replay.restore(plan.replay);
+    } else {
+      replay.exit();
+    }
+    restoringAnalysis = false;
     renderTimeframe();
     state.selection = plan.selection;
     chart.setSelection(state.selection);
@@ -391,6 +490,8 @@ async function openRecord(record) {
     elements.historyState.textContent = error.message;
     elements.historyState.className = 'history-state error';
     return false;
+  } finally {
+    restoringAnalysis = false;
   }
 }
 
@@ -434,7 +535,10 @@ function renderSavedRecords() {
     author.textContent = own ? 'Você' : (record.author?.display_name || 'Outro pesquisador');
     header.append(title, author);
     const summary = document.createElement('p');
-    summary.textContent = `${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)} · ${record.timeframeMinutes}m · ${record.researchStatus}`;
+    const analysisLabel = record.analysisType === 'replay'
+      ? `REPLAY · ${formatTimestamp(record.replayTimestamp)}`
+      : 'ANÁLISE RETROSPECTIVA';
+    summary.textContent = `${analysisLabel} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)} · ${record.timeframeMinutes}m · ${record.researchStatus}`;
     card.append(header, summary);
     card.addEventListener('click', () => openRecord(record));
     return card;
@@ -483,9 +587,11 @@ function renderAnalysisHistory() {
     entry.className = 'history-entry';
     const identity = document.createElement('div');
     const title = document.createElement('strong');
-    title.textContent = `${record.tradingDate} · ${record.contract}`;
+    title.textContent = record.analysisType === 'replay'
+      ? `REPLAY · ${formatTradingDate(record.tradingDate)} · ${formatTimestamp(record.replayTimestamp)} · ${record.timeframeMinutes}m`
+      : `ANÁLISE RETROSPECTIVA · ${formatTradingDate(record.tradingDate)} · ${record.timeframeMinutes}m`;
     const timeframe = document.createElement('small');
-    timeframe.textContent = `${record.timeframeMinutes}m · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)}`;
+    timeframe.textContent = `${record.contract} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)}`;
     identity.append(title, timeframe);
     const metadata = document.createElement('div');
     const pattern = document.createElement('strong');
@@ -568,6 +674,7 @@ elements.newResearch.addEventListener('click', () => {
   elements.analysisGrid.classList.remove('panel-open');
   renderSelection();
   renderSavedRecords();
+  renderReplayControls();
 });
 
 elements.dateSelect.addEventListener('change', async () => {
@@ -580,16 +687,26 @@ elements.timeframeControl.addEventListener('click', (event) => {
   if (!button || !state.baseCandles.length) return;
   state.timeframe = Number(button.dataset.minutes);
   elements.timeframeControl.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
-  renderTimeframe();
+  preserveTimeRangeOnce = true;
+  replay.setStepMinutes(state.timeframe);
   markDirty();
 });
+elements.replayToggle.addEventListener('click', () => {
+  if (replay.getState().active) replay.exit();
+  else replay.enter();
+});
+elements.replayPrevious.addEventListener('click', replay.previous);
+elements.replayNext.addEventListener('click', replay.next);
+elements.replayPlay.addEventListener('click', replay.play);
+elements.replayPause.addEventListener('click', replay.pause);
 elements.researchForm.addEventListener('input', markDirty);
 elements.researchForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   let draft;
   let errors;
   try {
-    draft = collectDraft();
+    const analysisContext = captureAnalysisContext(replay);
+    draft = collectDraft(analysisContext);
     errors = validateResearchDraft(draft);
   } catch (error) {
     showFormErrors([`Não foi possível validar a análise: ${error.message}`]);
@@ -616,6 +733,7 @@ elements.researchForm.addEventListener('submit', async (event) => {
     showFormErrors([error.message]);
   } finally {
     elements.saveResearch.disabled = false;
+    renderReplayControls();
   }
 });
 elements.deleteResearch.addEventListener('click', async () => {
@@ -628,6 +746,7 @@ elements.deleteResearch.addEventListener('click', async () => {
     clearActiveResearch();
     elements.researchPanel.hidden = true;
     elements.analysisGrid.classList.remove('panel-open');
+    renderReplayControls();
     await loadSavedRecords();
     await loadAnalysisHistory();
   } catch (error) { showFormErrors([error.message]); }
@@ -647,6 +766,7 @@ elements.authButton.classList.add('member');
 elements.historyButton.hidden = false;
 elements.authButton.addEventListener('click', async () => {
   if (state.dirty && !confirmDiscard()) return;
+  replay.pause();
   try { await onSignOut(); } catch (error) { elements.saveState.textContent = error.message; }
 });
 elements.historyButton.addEventListener('click', async () => {
@@ -670,12 +790,14 @@ function destroy() {
   state.selection = null;
   state.currentRecordId = null;
   state.dirty = false;
+  replay.dispose();
   window.removeEventListener('beforeunload', handleBeforeUnload);
   if (elements.historyDialog.open) elements.historyDialog.close();
   chart.destroy();
   mount.remove();
 }
 
+renderReplayControls();
 await bootstrap();
 if (!isCurrent()) {
   destroy();

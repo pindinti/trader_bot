@@ -21,6 +21,47 @@ function formatClock(time) {
   return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
 }
 
+function logicalToTimestamp(logical, candles, intervalSeconds) {
+  if (!Number.isFinite(logical) || !candles.length) return null;
+  const referenceIndex = Math.max(0, Math.min(candles.length - 1, Math.round(logical)));
+  return candles[referenceIndex].time + (logical - referenceIndex) * intervalSeconds;
+}
+
+function timestampToLogical(timestamp, candles, intervalSeconds) {
+  if (!Number.isFinite(timestamp) || !candles.length) return null;
+  let referenceIndex = 0;
+  for (let index = 1; index < candles.length; index += 1) {
+    if (Math.abs(candles[index].time - timestamp) < Math.abs(candles[referenceIndex].time - timestamp)) {
+      referenceIndex = index;
+    }
+  }
+  return referenceIndex + (timestamp - candles[referenceIndex].time) / intervalSeconds;
+}
+
+export function reprojectLogicalRange(range, fromCandles, fromIntervalSeconds, toCandles, toIntervalSeconds) {
+  if (!range || !fromCandles.length || !toCandles.length) return null;
+  const fromTime = logicalToTimestamp(range.from, fromCandles, fromIntervalSeconds);
+  const toTime = logicalToTimestamp(range.to, fromCandles, fromIntervalSeconds);
+  const projected = {
+    from: timestampToLogical(fromTime, toCandles, toIntervalSeconds),
+    to: timestampToLogical(toTime, toCandles, toIntervalSeconds),
+  };
+  return Number.isFinite(projected.from) && Number.isFinite(projected.to) ? projected : null;
+}
+
+export function replaceChartData({ timeScale, candleSeries, volumeSeries, candles, preserveViewport, projectedLogicalRange = null }) {
+  const logicalRange = preserveViewport === 'logical' ? timeScale.getVisibleLogicalRange() : null;
+  candleSeries.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
+  volumeSeries.setData(candles.map(({ time, volume, close, open }) => ({
+    time,
+    value: volume,
+    color: close >= open ? 'rgba(56, 217, 150, 0.30)' : 'rgba(240, 91, 98, 0.30)',
+  })));
+  if (logicalRange) timeScale.setVisibleLogicalRange(logicalRange);
+  else if (projectedLogicalRange) timeScale.setVisibleLogicalRange(projectedLogicalRange);
+  else timeScale.fitContent();
+}
+
 export function createMarketChart(container, researchBand, callbacks = {}) {
   const chart = createChart(container, {
     autoSize: true,
@@ -75,6 +116,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
   let currentCandles = [];
   let researchStart = null;
   let researchEnd = null;
+  let intervalSeconds = 60;
 
   function updateBand() {
     if (!researchStart || !researchEnd) return;
@@ -105,6 +147,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
     chart,
     series: candleSeries,
     getCandles: () => currentCandles,
+    getIntervalSeconds: () => intervalSeconds,
     onDrawingsChange: callbacks.onDrawingsChange,
     onSelectionChange: callbacks.onSelectionChange,
     onModeChange: callbacks.onModeChange,
@@ -112,18 +155,29 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
   });
 
   return {
-    setData(candles, researchWindow) {
+    setData(candles, researchWindow, { preserveViewport = false, sourceIntervalSeconds = 60 } = {}) {
+      const projectedLogicalRange = preserveViewport === 'time'
+        ? reprojectLogicalRange(
+          chart.timeScale().getVisibleLogicalRange(),
+          currentCandles,
+          intervalSeconds,
+          candles,
+          sourceIntervalSeconds,
+        )
+        : null;
       currentCandles = candles;
+      intervalSeconds = sourceIntervalSeconds;
       candleLookup = new Map(candles.map((item) => [item.time, item]));
-      candleSeries.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
-      volumeSeries.setData(candles.map(({ time, volume, close, open }) => ({
-        time,
-        value: volume,
-        color: close >= open ? 'rgba(56, 217, 150, 0.30)' : 'rgba(240, 91, 98, 0.30)',
-      })));
+      replaceChartData({
+        timeScale: chart.timeScale(),
+        candleSeries,
+        volumeSeries,
+        candles,
+        preserveViewport,
+        projectedLogicalRange,
+      });
       researchStart = researchWindow.start;
       researchEnd = researchWindow.end;
-      chart.timeScale().fitContent();
       requestAnimationFrame(updateBand);
       requestAnimationFrame(drawings.redraw);
     },

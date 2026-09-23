@@ -66,10 +66,27 @@ export function distanceToSegment(point, start, end) {
   return Math.hypot(point.x - (start.x + ratio * dx), point.y - (start.y + ratio * dy));
 }
 
-export function projectTimeCoordinate(time, candles, timeToCoordinate) {
+export function projectTimeCoordinate(time, candles, timeToCoordinate, logicalScale = null) {
   const exact = timeToCoordinate(time);
   if (exact !== null) return exact;
-  if (!Array.isArray(candles) || candles.length < 2) return null;
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+
+  if (logicalScale && Number.isFinite(logicalScale.intervalSeconds) && logicalScale.intervalSeconds > 0) {
+    const bucketTime = Math.floor(time / logicalScale.intervalSeconds) * logicalScale.intervalSeconds;
+    let reference = candles[0];
+    for (const candle of candles) {
+      if (Math.abs(candle.time - bucketTime) < Math.abs(reference.time - bucketTime)) reference = candle;
+    }
+    const referenceX = timeToCoordinate(reference.time);
+    const referenceLogical = referenceX === null ? null : logicalScale.coordinateToLogical(referenceX);
+    if (referenceLogical !== null && Number.isFinite(referenceLogical)) {
+      return logicalScale.logicalToCoordinate(
+        referenceLogical + (time - reference.time) / logicalScale.intervalSeconds,
+      );
+    }
+  }
+
+  if (candles.length < 2) return null;
   let low = 0;
   let high = candles.length;
   while (low < high) {
@@ -85,6 +102,26 @@ export function projectTimeCoordinate(time, candles, timeToCoordinate) {
   const rightX = timeToCoordinate(right.time);
   if (leftX === null || rightX === null || right.time === left.time) return null;
   return leftX + ((time - left.time) / (right.time - left.time)) * (rightX - leftX);
+}
+
+export function projectCoordinateTime(x, candles, scale) {
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+
+  const targetLogical = scale.coordinateToLogical(x);
+  if (!Number.isFinite(targetLogical) || !Number.isFinite(scale.intervalSeconds) || scale.intervalSeconds <= 0) return null;
+  let reference = null;
+  let referenceLogical = null;
+  for (const candle of candles) {
+    const coordinate = scale.timeToCoordinate(candle.time);
+    const logical = coordinate === null ? null : scale.coordinateToLogical(coordinate);
+    if (!Number.isFinite(logical)) continue;
+    if (reference === null || Math.abs(logical - targetLogical) < Math.abs(referenceLogical - targetLogical)) {
+      reference = candle;
+      referenceLogical = logical;
+    }
+  }
+  if (!reference) return null;
+  return Math.round(reference.time + (targetLogical - referenceLogical) * scale.intervalSeconds);
 }
 
 export function drawingGeometry(drawing, project, width) {

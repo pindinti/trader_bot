@@ -66,6 +66,17 @@
             </div></fieldset>
           </div>
 
+          <div class="replay-toolbar" aria-label="Controles de replay">
+            <div class="replay-heading"><span class="toolbar-label">Replay</span><button id="replayToggle" class="replay-toggle" type="button" aria-pressed="false">Iniciar replay</button></div>
+            <div class="replay-transport" role="group" aria-label="Navegação do replay">
+              <button id="replayPrevious" type="button" title="Candle anterior" aria-label="Candle anterior" disabled>←</button>
+              <button id="replayPlay" type="button" disabled>Reproduzir</button>
+              <button id="replayPause" type="button" disabled>Pausar</button>
+              <button id="replayNext" type="button" title="Próximo candle" aria-label="Próximo candle" disabled>→</button>
+            </div>
+            <div class="replay-clock"><span>Tempo simulado</span><strong id="replayTimestamp">—</strong><small id="replayPosition">Dados completos</small></div>
+          </div>
+
           <div class="drawing-toolbar" aria-label="Ferramentas do gráfico">
             <span class="toolbar-label">Ferramentas</span>
             <div id="drawingTools" class="tool-buttons">
@@ -84,8 +95,8 @@
             </div>
 
             <aside id="researchPanel" class="research-panel" hidden aria-label="Análise retrospectiva">
-              <header class="panel-header"><div><p class="eyebrow">Avaliação retrospectiva</p><h2 id="researchTitle">Nova análise</h2><span id="dirtyState" class="dirty-state">Sem alterações</span></div><button id="closeResearch" type="button" class="icon-button" aria-label="Fechar painel">×</button></header>
-              <div class="retrospective-warning"><strong>Retrospectiva</strong><p>O corte registra a informação que você pretende considerar. Ele não oculta candles futuros nem elimina viés retrospectivo.</p></div>
+              <header class="panel-header"><div><p id="researchKind" class="eyebrow">Análise retrospectiva</p><h2 id="researchTitle">Nova análise</h2><span id="dirtyState" class="dirty-state">Sem alterações</span></div><button id="closeResearch" type="button" class="icon-button" aria-label="Fechar painel">×</button></header>
+              <div class="retrospective-warning"><strong id="researchWarningTitle">Retrospectiva</strong><p id="researchWarningText">O corte registra a informação que você pretende considerar. Ele não oculta candles futuros nem elimina viés retrospectivo.</p></div>
               <form id="researchForm" novalidate>
                 <section class="form-section"><span class="section-number">01</span><div class="section-heading"><h3>Movimento</h3><p id="movementSummary">—</p></div><label class="field full"><span>Corte da análise</span><input id="analysisCutoff" name="analysisCutoff" type="datetime-local" step="1" required /></label></section>
                 <section class="form-section"><span class="section-number">02</span><div class="section-heading"><h3>Padrão identificado</h3><p>Interpretação humana, não detecção automática.</p></div><label class="field"><span>Padrão principal</span><select name="pattern" required><option value="">Selecione</option><option value="false_breakout">Falso rompimento</option><option value="pullback">Pullback</option><option value="inside_bar">Inside bar</option><option value="doji">Doji</option><option value="other">Outro / combinação</option></select></label><label class="field"><span>Direção</span><select name="direction" required><option value="">Selecione</option><option value="long">Compra</option><option value="short">Venda</option><option value="undetermined">Indeterminada</option></select></label><label class="field full"><span>Outro / combinação</span><input name="patternDetail" placeholder="Descreva quando aplicável" /></label></section>

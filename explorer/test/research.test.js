@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { wallClockToTimestamp } from '../src/data.js';
 import {
+  captureAnalysisContext,
   exportResearchRecords,
   fromDatabaseRecord,
   researchFormDatetimeToTimestamp,
@@ -67,6 +68,48 @@ test('maps records to and from database shape', () => {
   assert.equal(database.analysis_cutoff_timestamp, 1300);
   assert.equal(restored.marketContext, 'uptrend');
   assert.deepEqual(restored.factors, validDraft().factors);
+  assert.equal(database.analysis_type, 'retrospective');
+  assert.equal(restored.analysisType, 'retrospective');
+  assert.equal(restored.replayTimestamp, null);
+});
+
+test('validates and maps an explicit replay analysis snapshot', () => {
+  const draft = validDraft();
+  Object.assign(draft, { analysisType: 'replay', replayTimestamp: 1360, replayPosition: 6 });
+  assert.deepEqual(validateResearchDraft(draft), []);
+  const database = toDatabaseRecord(draft);
+  assert.equal(database.analysis_type, 'replay');
+  assert.equal(database.replay_timestamp, 1360);
+  assert.equal(database.replay_position, 6);
+  assert.equal(fromDatabaseRecord(database).analysisType, 'replay');
+
+  draft.endTimestamp = 1400;
+  assert.match(validateResearchDraft(draft).join(' '), /beyond its snapshot/);
+});
+
+test('captures replay metadata only after pausing playback', () => {
+  const calls = [];
+  const context = captureAnalysisContext({
+    pause: () => calls.push('pause'),
+    getState: () => {
+      calls.push('state');
+      return { active: true, simulatedTimestamp: 1360, position: 6 };
+    },
+  });
+  assert.deepEqual(calls, ['pause', 'state']);
+  assert.deepEqual(context, { analysisType: 'replay', replayTimestamp: 1360, replayPosition: 6 });
+  assert.equal(Object.isFrozen(context), true);
+});
+
+test('legacy database rows default to retrospective analysis', () => {
+  const database = toDatabaseRecord(validDraft());
+  delete database.analysis_type;
+  delete database.replay_timestamp;
+  delete database.replay_position;
+  const restored = fromDatabaseRecord(database);
+  assert.equal(restored.analysisType, 'retrospective');
+  assert.equal(restored.replayTimestamp, null);
+  assert.equal(restored.replayPosition, null);
 });
 
 test('JSON export includes schema version and drawing geometry', () => {

@@ -25,10 +25,29 @@ export function buildAnalysisRestorePlan(record, availableDates) {
   if (!Number.isFinite(record.startTimestamp) || !Number.isFinite(record.endTimestamp)) {
     throw new TypeError('A análise possui um intervalo inválido.');
   }
+  const analysisType = record.analysisType ?? 'retrospective';
+  if (!['retrospective', 'replay'].includes(analysisType)) {
+    throw new TypeError('A análise possui um tipo incompatível.');
+  }
+  const replay = analysisType === 'replay'
+    ? {
+      simulatedTimestamp: record.replayTimestamp,
+      position: record.replayPosition,
+    }
+    : null;
+  if (replay && (!Number.isFinite(replay.simulatedTimestamp) || !Number.isInteger(replay.position) || replay.position < 0)) {
+    throw new TypeError('A análise em replay possui um snapshot incompatível.');
+  }
+  if (replay && (record.endTimestamp > replay.simulatedTimestamp
+    || record.analysisCutoffTimestamp > replay.simulatedTimestamp)) {
+    throw new TypeError('A análise em replay contém dados posteriores ao snapshot.');
+  }
   return {
+    analysisType,
     tradingDate: record.tradingDate,
     timeframeMinutes: record.timeframeMinutes,
     selection: { startTimestamp: record.startTimestamp, endTimestamp: record.endTimestamp },
     drawings: serializeDrawings(record.drawings ?? []),
+    replay,
   };
 }

@@ -3,6 +3,7 @@ import {
   createDrawing,
   drawingGeometry,
   hitTestDrawings,
+  projectCoordinateTime,
   projectTimeCoordinate,
   serializeDrawings,
 } from './drawings.js';
@@ -20,7 +21,7 @@ function cloneAnchors(anchors) {
   return anchors.map((anchor) => ({ ...anchor }));
 }
 
-export function createDrawingOverlay({ container, chart, series, getCandles, onDrawingsChange, onSelectionChange, onModeChange, onSelectedChange }) {
+export function createDrawingOverlay({ container, chart, series, getCandles, getIntervalSeconds, onDrawingsChange, onSelectionChange, onModeChange, onSelectedChange }) {
   const canvas = document.createElement('canvas');
   canvas.className = 'drawing-canvas';
   canvas.setAttribute('aria-label', 'Camada de desenhos e seleção de movimento');
@@ -39,7 +40,16 @@ export function createDrawingOverlay({ container, chart, series, getCandles, onD
   let animationFrame = null;
 
   const project = {
-    timeToX: (time) => projectTimeCoordinate(time, getCandles(), (value) => chart.timeScale().timeToCoordinate(value)),
+    timeToX: (time) => projectTimeCoordinate(
+      time,
+      getCandles(),
+      (value) => chart.timeScale().timeToCoordinate(value),
+      {
+        intervalSeconds: getIntervalSeconds(),
+        coordinateToLogical: (x) => chart.timeScale().coordinateToLogical(x),
+        logicalToCoordinate: (logical) => chart.timeScale().logicalToCoordinate(logical),
+      },
+    ),
     priceToY: (price) => series.priceToCoordinate(price),
   };
 
@@ -47,7 +57,11 @@ export function createDrawingOverlay({ container, chart, series, getCandles, onD
     const rect = canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const time = chart.timeScale().coordinateToTime(x);
+    const time = projectCoordinateTime(x, getCandles(), {
+      intervalSeconds: getIntervalSeconds(),
+      timeToCoordinate: (value) => chart.timeScale().timeToCoordinate(value),
+      coordinateToLogical: (coordinate) => chart.timeScale().coordinateToLogical(coordinate),
+    });
     const price = series.coordinateToPrice(y);
     if (time === null || price === null || typeof time !== 'number' || !Number.isFinite(price) || price <= 0) return null;
     return { x, y, time: Math.round(time), price: Number(price.toFixed(4)) };
