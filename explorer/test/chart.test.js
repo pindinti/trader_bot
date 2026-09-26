@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { replaceChartData, reprojectLogicalRange } from '../src/chart.js';
+import { findDayBoundaryTimes, formatTimeAxisTick, replaceChartData, reprojectLogicalRange } from '../src/chart.js';
 
 const candle = { time: 100, open: 10, high: 12, low: 9, close: 11, volume: 20 };
 
@@ -70,4 +70,13 @@ test('an initial chart context fits content once', () => {
   });
 
   assert.deepEqual(calls, ['fit']);
+});
+
+test('time-axis ticks use exchange-wall-clock UTC projection and label day boundaries', () => {
+  const prior = Date.UTC(2026, 8, 18, 18, 29) / 1000;
+  const selected = Date.UTC(2026, 8, 21, 9, 0) / 1000;
+  const boundaries = findDayBoundaryTimes([{ time: prior }, { time: selected }, { time: selected + 60 }]);
+  assert.equal(formatTimeAxisTick(prior, boundaries), '18:29');
+  assert.equal(formatTimeAxisTick(selected, boundaries), '21/09 09:00');
+  assert.equal(formatTimeAxisTick(selected + 60, boundaries), '09:01');
 });

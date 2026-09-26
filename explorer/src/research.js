@@ -1,4 +1,5 @@
 import { serializeDrawings } from './drawings.js';
+import { SUPPORTED_TIMEFRAMES } from './aggregate.js';
 
 export const RESEARCH_SCHEMA_VERSION = 1;
 export const PATTERNS = Object.freeze(['false_breakout', 'pullback', 'inside_bar', 'doji', 'other']);
@@ -58,7 +59,7 @@ export function validateResearchDraft(draft) {
   if (draft?.schemaVersion !== RESEARCH_SCHEMA_VERSION) errors.push('Unsupported research schema version');
   requiredText(draft?.contract, 'Contract', errors);
   requiredText(draft?.tradingDate, 'Trading date', errors);
-  if (![1, 5, 10, 15, 30, 60].includes(draft?.timeframeMinutes)) errors.push('A supported timeframe is required');
+  if (!SUPPORTED_TIMEFRAMES.includes(draft?.timeframeMinutes)) errors.push('A supported timeframe is required');
   if (!Number.isFinite(draft?.startTimestamp) || !Number.isFinite(draft?.endTimestamp) || draft.startTimestamp > draft.endTimestamp) {
     errors.push('A valid movement selection is required');
   }

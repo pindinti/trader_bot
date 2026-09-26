@@ -1,4 +1,4 @@
-export const SUPPORTED_TIMEFRAMES = Object.freeze([1, 5, 10, 15, 30, 60]);
+export const SUPPORTED_TIMEFRAMES = Object.freeze([1, 2, 5, 10, 15, 30, 60]);
 
 /**
  * Aggregate chronologically ordered one-minute candles into wall-clock buckets.

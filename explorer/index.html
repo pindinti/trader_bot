@@ -62,8 +62,16 @@
             <div class="contract-block"><span class="control-label">Contrato</span><strong id="contractValue">—</strong><small>Mini dólar futuro</small></div>
             <label class="field"><span class="control-label">Pregão</span><select id="dateSelect" disabled aria-label="Selecionar pregão"></select></label>
             <fieldset class="timeframe-field"><legend class="control-label">Intervalo</legend><div id="timeframeControl" class="segment-control" aria-label="Selecionar intervalo">
-              <button type="button" data-minutes="1" aria-pressed="true">1m</button><button type="button" data-minutes="5" aria-pressed="false">5m</button><button type="button" data-minutes="10" aria-pressed="false">10m</button><button type="button" data-minutes="15" aria-pressed="false">15m</button><button type="button" data-minutes="30" aria-pressed="false">30m</button><button type="button" data-minutes="60" aria-pressed="false">60m</button>
+              <button type="button" data-minutes="1" aria-pressed="true">1m</button><button type="button" data-minutes="2" aria-pressed="false">2m</button><button type="button" data-minutes="5" aria-pressed="false">5m</button><button type="button" data-minutes="10" aria-pressed="false">10m</button><button type="button" data-minutes="15" aria-pressed="false">15m</button><button type="button" data-minutes="30" aria-pressed="false">30m</button><button type="button" data-minutes="60" aria-pressed="false">60m</button>
             </div></fieldset>
+          </div>
+
+          <div class="indicator-toolbar" aria-label="Médias móveis">
+            <span class="toolbar-label">Médias</span>
+            <div id="movingAverageControl" class="indicator-buttons" role="group" aria-label="Exibir ou ocultar médias móveis">
+              <button type="button" data-average="sma-9" aria-pressed="false">SMA 9</button><button type="button" data-average="sma-21" aria-pressed="false">SMA 21</button><button type="button" data-average="sma-200" aria-pressed="false">SMA 200</button><button type="button" data-average="ema-9" aria-pressed="false">EMA 9</button><button type="button" data-average="ema-21" aria-pressed="false">EMA 21</button><button type="button" data-average="ema-200" aria-pressed="false">EMA 200</button>
+            </div>
+            <span id="movingAverageState" class="indicator-state">Nenhuma média ativa</span>
           </div>
 
           <div class="replay-toolbar" aria-label="Controles de replay">
@@ -115,7 +123,7 @@
         <p class="redistribution-note">Uso local de pesquisa. A publicação de dados históricos derivados da B3 depende de verificação prévia dos termos aplicáveis de licenciamento e redistribuição.</p>
       </main>
     </div>
-    <dialog id="historyDialog" class="history-dialog"><div class="history-dialog-content"><header><div><p class="eyebrow">Arquivo compartilhado</p><h2>Histórico de análises</h2></div><button id="closeHistory" class="icon-button" type="button" aria-label="Fechar histórico">×</button></header><div id="historyState" class="history-state" role="status">Carregando análises…</div><div id="historyList" class="history-list"></div></div></dialog>
+    <dialog id="historyDialog" class="history-dialog"><div class="history-dialog-content"><header><div><p class="eyebrow">Arquivo compartilhado</p><h2>Histórico de análises</h2></div><button id="closeHistory" class="icon-button" type="button" aria-label="Fechar histórico">×</button></header><label class="history-search"><span>Buscar nas análises</span><input id="historySearch" type="search" autocomplete="off" placeholder="Contexto, padrão, direção, texto ou data" /></label><div id="historyState" class="history-state" role="status">Carregando análises…</div><div id="historyList" class="history-list"></div></div></dialog>
     </template>
     <script type="module" src="/src/main.js"></script>
   </body>

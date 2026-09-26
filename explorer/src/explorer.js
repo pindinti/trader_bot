@@ -1,9 +1,23 @@
-import { aggregateCandles } from './aggregate.js';
 import { createMarketChart } from './chart.js';
-import { parseDayPayload, validateManifest, wallClockToTimestamp } from './data.js';
+import { validateManifest, wallClockToTimestamp } from './data.js';
 import { parseFibonacciLevels } from './drawings.js';
-import { buildAnalysisRestorePlan, canAccessAnalysisHistory, canCreateAnalysis } from './history.js';
-import { aggregateCompletedReplayCandles, createCandleReplay } from './replay.js';
+import {
+  DIRECTION_LABELS,
+  PATTERN_LABELS,
+  STATUS_LABELS,
+  buildAnalysisRestorePlan,
+  canAccessAnalysisHistory,
+  canCreateAnalysis,
+  filterAnalysisHistory,
+  marketContextLabel,
+} from './history.js';
+import {
+  buildChartContext,
+  createAuthenticatedDayCache,
+  loadWarmupSessions,
+} from './indicator-context.js';
+import { calculateMovingAverages, largestMovingAveragePeriod } from './moving-averages.js';
+import { createCandleReplay } from './replay.js';
 import {
   RESEARCH_SCHEMA_VERSION,
   captureAnalysisContext,
@@ -35,6 +49,7 @@ const elements = Object.fromEntries([
   'formErrors', 'saveResearch', 'newResearch', 'deleteResearch', 'saveState', 'savedRecords',
   'exportResearch', 'authButton', 'historyButton',
   'historyDialog', 'closeHistory', 'historyState', 'historyList',
+  'historySearch', 'movingAverageControl', 'movingAverageState',
   'replayToggle', 'replayPrevious', 'replayPlay', 'replayPause', 'replayNext',
   'replayTimestamp', 'replayPosition',
 ].map((id) => [id, mount.querySelector(`#${id}`)]));
@@ -45,11 +60,6 @@ const FACTORS = [
   ['higher_timeframe', 'Confirmação em tempo maior'], ['candlestick', 'Padrão de candle'],
   ['volume', 'Volume'], ['other', 'Outro'],
 ];
-const PATTERN_LABELS = {
-  false_breakout: 'Falso rompimento', pullback: 'Pullback', inside_bar: 'Inside bar', doji: 'Doji', other: 'Outro / combinação',
-};
-const DIRECTION_LABELS = { long: 'Compra', short: 'Venda', undetermined: 'Indeterminada' };
-const STATUS_LABELS = { observation: 'Somente observação', candidate: 'Regra candidata', clarification: 'Precisa de esclarecimento', review: 'Pronta para revisão' };
 const DRAWING_LABELS = { horizontal: 'Horizontal', trend: 'Tendência', fibonacci: 'Fibonacci', rectangle: 'Zona' };
 const number = new Intl.NumberFormat('pt-BR');
 const price = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 4 });
@@ -61,6 +71,8 @@ const state = {
   currentDate: null,
   baseCandles: [],
   candles: [],
+  priorSessions: [],
+  enabledMovingAverages: new Set(),
   timeframe: 1,
   selection: null,
   session,
@@ -70,12 +82,15 @@ const state = {
   currentRecordId: null,
   dirty: false,
   suppressDirty: false,
+  historyQuery: '',
 };
 let active = true;
 let loadingDay = false;
 let replayWasActive = false;
 let restoringAnalysis = false;
 let preserveTimeRangeOnce = false;
+let indicatorLoadGeneration = 0;
+let dayCache = null;
 
 function showChartState(kind, title, detail) {
   elements.chartState.className = `chart-state ${kind}`;
@@ -118,6 +133,16 @@ const chart = createMarketChart(mount.querySelector('#chart'), elements.research
   onHover: renderInfo,
   onDrawingsChange: () => { markDirty(); renderFactorList(captureFactors()); renderSelection(); },
   onSelectionChange: (selection) => {
+    const selectedDayStart = state.currentDate ? wallClockToTimestamp(`${state.currentDate} 00:00:00`) : null;
+    if (selection && (!Number.isFinite(selectedDayStart)
+      || selection.startTimestamp < selectedDayStart
+      || selection.endTimestamp >= selectedDayStart + 86400)) {
+      state.selection = null;
+      chart.setSelection(null);
+      renderSelection();
+      elements.selectionStatus.textContent = 'Selecione um movimento no pregão atual; candles anteriores servem apenas como contexto';
+      return;
+    }
     state.selection = selection;
     renderSelection();
     if (!elements.researchPanel.hidden) {
@@ -221,20 +246,22 @@ function renderSelection() {
 
 function renderTimeframe({ preserveViewport = replay.getState().active ? 'logical' : false } = {}) {
   const marketView = replay.getMarketView();
-  state.candles = marketView.active
-    ? aggregateCompletedReplayCandles(
-      marketView.candles,
-      state.timeframe,
-      marketView.simulatedTimestamp,
-    )
-    : aggregateCandles(state.baseCandles, state.timeframe);
+  const chartContext = buildChartContext({
+    priorSessions: state.priorSessions,
+    selectedCandles: marketView.candles,
+    timeframe: state.timeframe,
+    simulatedTimestamp: marketView.simulatedTimestamp,
+  });
+  state.candles = chartContext.selectedCandles;
+  const movingAverages = calculateMovingAverages(chartContext.candles, state.enabledMovingAverages);
   elements.chartTimeframe.textContent = `· ${state.timeframe} minuto${state.timeframe === 1 ? '' : 's'}`;
   elements.datasetNote.textContent = marketView.active
-    ? `${marketView.candles.length} de ${state.baseCandles.length} candles de 1 minuto · buckets completos`
-    : `${state.candles.length} candles · base auditada de 1 minuto`;
-  chart.setData(state.candles, researchWindow(state.currentDate), {
+    ? `${marketView.candles.length} de ${state.baseCandles.length} candles de 1 minuto · buckets completos${chartContext.contextCandles.length ? ` · ${chartContext.contextCandles.length} de contexto` : ''}`
+    : `${state.candles.length} candles do pregão${chartContext.contextCandles.length ? ` · ${chartContext.contextCandles.length} de contexto` : ''} · base auditada de 1 minuto`;
+  chart.setData(chartContext.candles, researchWindow(state.currentDate), {
     preserveViewport,
     sourceIntervalSeconds: state.timeframe * 60,
+    movingAverages,
   });
   renderInfo();
   renderSelection();
@@ -243,6 +270,43 @@ function renderTimeframe({ preserveViewport = replay.getState().active ? 'logica
     showChartState('empty', 'Aguardando candle completo', `Avance o replay até fechar o primeiro candle de ${state.timeframe} minutos.`);
   }
   else showChartState('empty', 'Nenhum candle disponível', 'O arquivo selecionado não contém dados para exibir.');
+}
+
+async function refreshIndicatorContext({ preserveViewport = 'time' } = {}) {
+  const generation = ++indicatorLoadGeneration;
+  state.priorSessions = [];
+  const requiredBars = largestMovingAveragePeriod(state.enabledMovingAverages);
+  if (!requiredBars || !state.currentDate || !dayCache) {
+    elements.movingAverageState.textContent = requiredBars ? 'Contexto indisponível' : 'Nenhuma média ativa';
+    if (state.currentDate && state.baseCandles.length) renderTimeframe({ preserveViewport });
+    return;
+  }
+
+  elements.movingAverageState.textContent = 'Carregando contexto…';
+  try {
+    const sessions = await loadWarmupSessions({
+      entries: state.dates,
+      currentDate: state.currentDate,
+      timeframe: state.timeframe,
+      requiredBars,
+      loadDay: (date) => dayCache.load(date),
+    });
+    if (!active || generation !== indicatorLoadGeneration) return;
+    state.priorSessions = sessions;
+    const completed = sessions.reduce(
+      (total, session) => total + buildChartContext({ priorSessions: [session], selectedCandles: [], timeframe: state.timeframe }).contextCandles.length,
+      0,
+    );
+    elements.movingAverageState.textContent = sessions.length
+      ? `${completed} candles de aquecimento · ${sessions.length} pregão${sessions.length === 1 ? '' : 'es'}`
+      : 'Histórico anterior indisponível';
+    renderTimeframe({ preserveViewport });
+  } catch (error) {
+    if (!active || generation !== indicatorLoadGeneration) return;
+    state.priorSessions = [];
+    elements.movingAverageState.textContent = `Contexto indisponível: ${error.message}`;
+    renderTimeframe({ preserveViewport });
+  }
 }
 
 function clearActiveResearch({ clearDrawings = true } = {}) {
@@ -261,27 +325,29 @@ function confirmDiscard() {
 
 async function loadDay(day, { preserveResearch = false, replayContext = null } = {}) {
   loadingDay = true;
+  indicatorLoadGeneration += 1;
   state.baseCandles = [];
   state.candles = [];
+  state.priorSessions = [];
   replay.load([]);
   showChartState('loading', 'Carregando o pregão', 'Lendo somente candles exportados e auditados…');
   elements.dateSelect.disabled = true;
   try {
-    const entry = state.dates.find((item) => item.date === day);
-    if (!entry) throw new Error('O pregão selecionado não está no manifesto.');
-    const payload = await downloadCandleJson(entry.file);
+    if (!dayCache) throw new Error('O cache autenticado de candles não foi inicializado.');
+    const candles = await dayCache.load(day);
     if (!active) return;
-    state.baseCandles = parseDayPayload(payload, state.contract, day);
+    state.baseCandles = candles;
     state.currentDate = day;
     replay.load(state.baseCandles);
     if (replayContext) replay.restore(replayContext);
     elements.chartDate.textContent = dateLabel.format(new Date(`${day}T00:00:00Z`));
     if (!preserveResearch) clearActiveResearch();
-    renderTimeframe();
+    await refreshIndicatorContext({ preserveViewport: false });
     await loadSavedRecords();
   } catch (error) {
     state.baseCandles = [];
     state.candles = [];
+    state.priorSessions = [];
     replay.load([]);
     renderInfo(null);
     showChartState('error', 'Não foi possível abrir os dados', error.message || 'Erro inesperado.');
@@ -462,6 +528,8 @@ async function openRecord(record) {
     state.currentRecordId = record.id;
     chart.setMode('navigate');
     state.timeframe = plan.timeframeMinutes;
+    state.priorSessions = [];
+    indicatorLoadGeneration += 1;
     elements.timeframeControl.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.minutes) === state.timeframe)));
     replay.setStepMinutes(state.timeframe);
     if (plan.tradingDate !== state.currentDate) {
@@ -475,7 +543,7 @@ async function openRecord(record) {
       replay.exit();
     }
     restoringAnalysis = false;
-    renderTimeframe();
+    await refreshIndicatorContext({ preserveViewport: 'time' });
     state.selection = plan.selection;
     chart.setSelection(state.selection);
     chart.setDrawings(plan.drawings);
@@ -538,7 +606,7 @@ function renderSavedRecords() {
     const analysisLabel = record.analysisType === 'replay'
       ? `REPLAY · ${formatTimestamp(record.replayTimestamp)}`
       : 'ANÁLISE RETROSPECTIVA';
-    summary.textContent = `${analysisLabel} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)} · ${record.timeframeMinutes}m · ${record.researchStatus}`;
+    summary.textContent = `${analysisLabel} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)} · ${record.timeframeMinutes}m · ${marketContextLabel(record)} · ${STATUS_LABELS[record.researchStatus] ?? record.researchStatus}`;
     card.append(header, summary);
     card.addEventListener('click', () => openRecord(record));
     return card;
@@ -580,12 +648,19 @@ function renderAnalysisHistory() {
     elements.historyState.textContent = 'Nenhuma análise salva.';
     return;
   }
+  const visibleRecords = filterAnalysisHistory(state.historyRecords, state.historyQuery);
+  if (!visibleRecords.length) {
+    elements.historyState.hidden = false;
+    elements.historyState.textContent = 'Nenhuma análise corresponde à busca.';
+    return;
+  }
   elements.historyState.hidden = true;
-  const entries = state.historyRecords.map((record) => {
+  const entries = visibleRecords.map((record) => {
     const entry = document.createElement('button');
     entry.type = 'button';
     entry.className = 'history-entry';
     const identity = document.createElement('div');
+    identity.className = 'history-identity';
     const title = document.createElement('strong');
     title.textContent = record.analysisType === 'replay'
       ? `REPLAY · ${formatTradingDate(record.tradingDate)} · ${formatTimestamp(record.replayTimestamp)} · ${record.timeframeMinutes}m`
@@ -594,15 +669,26 @@ function renderAnalysisHistory() {
     timeframe.textContent = `${record.contract} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)}`;
     identity.append(title, timeframe);
     const metadata = document.createElement('div');
+    metadata.className = 'history-metadata';
     const pattern = document.createElement('strong');
     pattern.textContent = PATTERN_LABELS[record.pattern] ?? record.pattern;
     const details = document.createElement('span');
     details.textContent = `${DIRECTION_LABELS[record.direction] ?? record.direction} · ${STATUS_LABELS[record.researchStatus] ?? record.researchStatus}`;
     metadata.append(pattern, details);
+    const context = document.createElement('div');
+    context.className = 'history-context';
+    const contextHeading = document.createElement('strong');
+    contextHeading.textContent = 'Contexto de mercado';
+    const contextValue = document.createElement('span');
+    contextValue.className = 'history-context-value';
+    const contextExplanation = String(record.contextExplanation ?? '').trim();
+    const contextName = record.marketContext ? marketContextLabel(record) : 'Não informado';
+    contextValue.textContent = contextExplanation ? `${contextName} · ${contextExplanation}` : contextName;
+    context.append(contextHeading, contextValue);
     const author = document.createElement('span');
     author.className = 'history-author';
     author.textContent = record.authorId === state.session?.user.id ? 'Você' : (record.author?.display_name || record.author?.email || 'Outro pesquisador');
-    entry.append(identity, metadata, author);
+    entry.append(identity, metadata, context, author);
     entry.addEventListener('click', () => openRecord(record));
     return entry;
   });
@@ -616,6 +702,11 @@ async function bootstrap() {
     const contract = validateManifest(manifest);
     state.contract = contract.symbol;
     state.dates = contract.dates;
+    dayCache = createAuthenticatedDayCache({
+      contract: state.contract,
+      entries: state.dates,
+      download: downloadCandleJson,
+    });
     elements.contractValue.textContent = contract.symbol;
     elements.chartContract.textContent = contract.symbol;
     elements.dateSelect.innerHTML = contract.dates.map(({ date }) => `<option value="${date}">${date.split('-').reverse().join('/')}</option>`).join('');
@@ -686,10 +777,22 @@ elements.timeframeControl.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-minutes]');
   if (!button || !state.baseCandles.length) return;
   state.timeframe = Number(button.dataset.minutes);
+  state.priorSessions = [];
+  indicatorLoadGeneration += 1;
   elements.timeframeControl.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
   preserveTimeRangeOnce = true;
   replay.setStepMinutes(state.timeframe);
+  void refreshIndicatorContext({ preserveViewport: 'time' });
   markDirty();
+});
+elements.movingAverageControl.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-average]');
+  if (!button || !state.baseCandles.length) return;
+  const key = button.dataset.average;
+  if (state.enabledMovingAverages.has(key)) state.enabledMovingAverages.delete(key);
+  else state.enabledMovingAverages.add(key);
+  button.setAttribute('aria-pressed', String(state.enabledMovingAverages.has(key)));
+  void refreshIndicatorContext({ preserveViewport: 'time' });
 });
 elements.replayToggle.addEventListener('click', () => {
   if (replay.getState().active) replay.exit();
@@ -775,6 +878,10 @@ elements.historyButton.addEventListener('click', async () => {
   await loadAnalysisHistory();
 });
 elements.closeHistory.addEventListener('click', () => elements.historyDialog.close());
+elements.historySearch.addEventListener('input', () => {
+  state.historyQuery = elements.historySearch.value;
+  renderAnalysisHistory();
+});
 const handleBeforeUnload = (event) => { if (state.dirty) event.preventDefault(); };
 window.addEventListener('beforeunload', handleBeforeUnload);
 
@@ -785,11 +892,16 @@ function destroy() {
   state.member = null;
   state.baseCandles = [];
   state.candles = [];
+  state.priorSessions = [];
+  state.enabledMovingAverages.clear();
   state.records = [];
   state.historyRecords = [];
   state.selection = null;
   state.currentRecordId = null;
   state.dirty = false;
+  indicatorLoadGeneration += 1;
+  dayCache?.clear();
+  dayCache = null;
   replay.dispose();
   window.removeEventListener('beforeunload', handleBeforeUnload);
   if (elements.historyDialog.open) elements.historyDialog.close();

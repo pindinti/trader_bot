@@ -3,6 +3,7 @@ import {
   ColorType,
   CrosshairMode,
   HistogramSeries,
+  LineSeries,
   createChart,
 } from 'lightweight-charts';
 import { createDrawingOverlay } from './drawing-overlay.js';
@@ -19,6 +20,27 @@ const COLORS = {
 function formatClock(time) {
   const date = new Date(time * 1000);
   return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+export function findDayBoundaryTimes(candles) {
+  const boundaries = new Set();
+  let previousDay = null;
+  for (const candle of candles) {
+    const day = new Date(candle.time * 1000).toISOString().slice(0, 10);
+    if (previousDay !== null && day !== previousDay) boundaries.add(candle.time);
+    previousDay = day;
+  }
+  return boundaries;
+}
+
+export function formatTimeAxisTick(time, dayBoundaryTimes = new Set()) {
+  const timestamp = Number(time);
+  if (!Number.isFinite(timestamp)) return '';
+  const date = new Date(timestamp * 1000);
+  const clock = `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+  return dayBoundaryTimes.has(timestamp)
+    ? `${String(date.getUTCDate()).padStart(2, '0')}/${String(date.getUTCMonth() + 1).padStart(2, '0')} ${clock}`
+    : clock;
 }
 
 function logicalToTimestamp(logical, candles, intervalSeconds) {
@@ -63,6 +85,7 @@ export function replaceChartData({ timeScale, candleSeries, volumeSeries, candle
 }
 
 export function createMarketChart(container, researchBand, callbacks = {}) {
+  let dayBoundaryTimes = new Set();
   const chart = createChart(container, {
     autoSize: true,
     layout: {
@@ -89,7 +112,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
       secondsVisible: false,
       rightOffset: 5,
       barSpacing: 7,
-      tickMarkFormatter: (time) => formatClock(time),
+      tickMarkFormatter: (time) => formatTimeAxisTick(time, dayBoundaryTimes),
     },
     localization: { timeFormatter: (time) => formatClock(time) },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
@@ -111,6 +134,25 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
     priceLineVisible: false,
   }, 0);
   chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+  const movingAverageStyles = {
+    'sma-9': { color: '#f3c969', lineWidth: 1 },
+    'sma-21': { color: '#db8f55', lineWidth: 1 },
+    'sma-200': { color: '#dd6673', lineWidth: 2 },
+    'ema-9': { color: '#70d9d2', lineWidth: 1 },
+    'ema-21': { color: '#5fa9ef', lineWidth: 1 },
+    'ema-200': { color: '#ab83e8', lineWidth: 2 },
+  };
+  const movingAverageSeries = Object.fromEntries(Object.entries(movingAverageStyles).map(([key, options]) => [
+    key,
+    chart.addSeries(LineSeries, {
+      ...options,
+      title: key.toUpperCase().replace('-', ' '),
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    }, 0),
+  ]));
 
   let candleLookup = new Map();
   let currentCandles = [];
@@ -155,7 +197,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
   });
 
   return {
-    setData(candles, researchWindow, { preserveViewport = false, sourceIntervalSeconds = 60 } = {}) {
+    setData(candles, researchWindow, { preserveViewport = false, sourceIntervalSeconds = 60, movingAverages = {} } = {}) {
       const projectedLogicalRange = preserveViewport === 'time'
         ? reprojectLogicalRange(
           chart.timeScale().getVisibleLogicalRange(),
@@ -168,6 +210,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
       currentCandles = candles;
       intervalSeconds = sourceIntervalSeconds;
       candleLookup = new Map(candles.map((item) => [item.time, item]));
+      dayBoundaryTimes = findDayBoundaryTimes(candles);
       replaceChartData({
         timeScale: chart.timeScale(),
         candleSeries,
@@ -176,6 +219,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
         preserveViewport,
         projectedLogicalRange,
       });
+      Object.entries(movingAverageSeries).forEach(([key, series]) => series.setData(movingAverages[key] ?? []));
       researchStart = researchWindow.start;
       researchEnd = researchWindow.end;
       requestAnimationFrame(updateBand);

@@ -201,6 +201,22 @@ test('changing timeframe at a non-aligned position rewinds to the last completed
   assert.equal(replay.getState().simulatedTimestamp, START + 4 * 60);
 });
 
+test('two-minute replay steps on aligned completed boundaries and rewinds symmetrically', () => {
+  const replay = createCandleReplay();
+  replay.load(Array.from({ length: 8 }, (_, index) => candle(index)));
+  replay.enter();
+  Array.from({ length: 4 }).forEach(() => replay.next());
+  assert.equal(replay.getState().simulatedTimestamp, START + 4 * 60);
+
+  replay.setStepMinutes(2);
+  assert.equal(replay.getState().playing, false);
+  assert.equal(replay.getState().simulatedTimestamp, START + 3 * 60);
+  assert.equal(replay.next(), true);
+  assert.equal(replay.getState().simulatedTimestamp, START + 5 * 60);
+  assert.equal(replay.previous(), true);
+  assert.equal(replay.getState().simulatedTimestamp, START + 3 * 60);
+});
+
 test('a partial final higher-timeframe bucket is not a replay step', () => {
   const replay = createCandleReplay();
   replay.load(Array.from({ length: 8 }, (_, index) => candle(index)));

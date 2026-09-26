@@ -4,6 +4,7 @@ data/wdo/
 data/audit/
 data/candles/
 data/explorer_storage/
+data/research/
 
 # Python-generated caches.
 __pycache__/

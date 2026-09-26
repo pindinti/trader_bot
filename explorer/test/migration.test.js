@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const migrationUrl = new URL('../supabase/migrations/202609220001_research_annotations.sql', import.meta.url);
 const replayMigrationUrl = new URL('../supabase/migrations/202609230001_replay_analyses.sql', import.meta.url);
+const twoMinuteMigrationUrl = new URL('../supabase/migrations/202609250001_add_two_minute_timeframe.sql', import.meta.url);
 
 test('Supabase migration enables RLS and keeps drawings owned by their annotation', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -27,4 +28,10 @@ test('replay analysis migration is additive and preserves existing authorization
   assert.match(sql, /replay_position is not null/i);
   assert.match(sql, /replay_timestamp >= end_timestamp/i);
   assert.doesNotMatch(sql, /create policy|drop policy|grant .*research_annotations|revoke .*research_annotations/i);
+});
+
+test('two-minute migration changes only the timeframe constraint', async () => {
+  const sql = await readFile(twoMinuteMigrationUrl, 'utf8');
+  assert.match(sql, /timeframe_minutes in \(1, 2, 5, 10, 15, 30, 60\)/i);
+  assert.doesNotMatch(sql, /create policy|drop policy|grant |revoke |alter column|drop column/i);
 });

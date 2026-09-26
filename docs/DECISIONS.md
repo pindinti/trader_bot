@@ -42,9 +42,9 @@ Reference: [replay-analysis migration](../explorer/supabase/migrations/202609230
 
 ## Date not recorded — detectors remain independent of replay UI and each other
 
-Future detectors should consume the active replay's `getMarketView()` result rather than DOM, chart, drawing, or Explorer state. Each detector should be independently testable. Future confluence should compose explicit detector outputs rather than couple detector internals.
+Observers should consume the active replay's `getMarketView()` result rather than DOM, chart, drawing, or Explorer state. Each observer should be independently testable. Future confluence should compose explicit observer outputs rather than couple observer internals.
 
-This is an architectural decision for planned work; no detector or detector registry exists today.
+One standalone experimental false-breakout observer now follows this boundary. No detector registry, additional observer set, or composition layer exists today.
 
 ## Date not recorded — human annotations remain separate from detector events
 
@@ -64,4 +64,10 @@ Reference: [`drawings.js`](../explorer/src/drawings.js).
 
 Drawings are supported for use in the timeframe in which they were created. Cross-timeframe visual stability remains unresolved. Stored schema-version-1 anchors are retained, and the current code does not automatically hide drawings on other timeframes.
 
-This limitation supersedes stronger wording in the current [Explorer README](../explorer/README.md) and assertions in projection-focused unit tests: those describe intended coordinate behavior but do not establish the browser-level visual stability observed in manual testing.
+Projection-focused unit tests describe intended coordinate behavior but do not establish browser-level cross-timeframe visual stability. The [Explorer README](../explorer/README.md) therefore documents the same creation-timeframe support boundary.
+
+## 2026-09-25 — indicator warmup is chart context, not replay market data
+
+SMA and EMA overlays use completed closes from the active chart timeframe. EMA is deterministically seeded with the first `N`-close SMA and then uses `alpha = 2 / (N + 1)`; exact parity with Nelogica Profit is not yet claimed. Preceding available sessions may be loaded from private Storage and shown as chart context, but `getMarketView()` retains only the selected session's one-minute replay prefix. The two inputs remain separate so indicators gain warmup without expanding observer access.
+
+References: [`moving-averages.js`](../explorer/src/moving-averages.js), [`indicator-context.js`](../explorer/src/indicator-context.js).

@@ -70,7 +70,7 @@ Get-ChildItem data/explorer_storage -File -Recurse |
 
 ## Drawing model
 
-Drawings use schema version `1` and store actual chart timestamps and prices, never pixels. Switching timeframes reprojects the same anchors and does not snap them to different candles.
+Drawings use schema version `1` and store actual chart timestamps and prices, never pixels. They are supported for use in their creation timeframe; cross-timeframe visual stability remains unresolved.
 
 - Horizontal line: one timestamp/price anchor; the price is rendered across the pane.
 - Trend line: two ordered timestamp/price anchors.
@@ -83,7 +83,7 @@ Drawing tools are one-shot and return to Navigate mode after completion. Edit mo
 
 ## Candle replay
 
-Replay starts at the first available 1-minute candle. Manual navigation and playback then advance to the next completed candle boundary for the selected chart timeframe: every source candle at 1m, or the clock-aligned completion boundary at 5m, 10m, 15m, 30m, and 60m. The chart always receives only the audited 1-minute prefix through the simulated timestamp. Higher timeframes display only completed buckets; no partial final bucket is presented as complete.
+Replay starts at the first available 1-minute candle. Manual navigation and playback then advance to the next completed candle boundary for the selected chart timeframe: every source candle at 1m, or the clock-aligned completion boundary at 2m, 5m, 10m, 15m, 30m, and 60m. The chart always receives only the audited 1-minute prefix through the simulated timestamp. Higher timeframes display only completed buckets; no partial final bucket is presented as complete.
 
 Switching from a shorter timeframe at a non-aligned replay position pauses playback and rewinds the simulated clock to the latest completed boundary of the new timeframe. If that session has no earlier completed boundary, it returns to the first source candle. This deterministic rewind prevents future leakage and makes Previous/Next symmetric on the new timeframe. When the remaining session contains no further completed bucket, Next and Play are disabled; switching to a shorter timeframe can still traverse the remaining 1-minute data.
 
@@ -95,6 +95,14 @@ Playback uses a fixed local speed of one completed chart-timeframe candle every 
 
 Analyses created while replay is active are saved explicitly as **Análise em replay**, with the simulated timestamp, selected timeframe, and source position captured together after playback is paused. Opening one restores the same audited 1-minute prefix and never loads later candles into the chart. Existing records and analyses created with the complete day remain **Análise retrospectiva**. Replay is a research context, not a claim that the researcher had never previously seen the complete session.
 
+## Moving averages and historical context
+
+The chart can show SMA or EMA overlays for 9, 21, and 200 completed candles of the active chart timeframe. All calculations use candle closes. An SMA starts only after `N` completed values. An EMA is seeded by the SMA of its first `N` completed closes and then uses `alpha = 2 / (N + 1)`. This is the Explorer's deterministic convention; byte-for-byte parity with Nelogica Profit has not yet been visually established.
+
+When an average is enabled, the Explorer follows the private manifest backward through available trading sessions for the same contract until it has the requested prior active-timeframe context or exhausts available history. Loaded days are cached for the protected Explorer session. Prior candles are visible on the chart, and date-boundary ticks use `DD/MM HH:mm`; ordinary ticks remain `HH:mm` under the existing exchange-wall-clock projection.
+
+Warmup data never enters `getMarketView()`. During replay, indicators receive completed prior-session context plus only the visible selected-session prefix, so later selected-day candles cannot influence earlier values. The false-breakout observer therefore continues to receive only the selected-day one-minute prefix.
+
 ## Retrospective research records
 
 Movement selection snaps to displayed candle timestamps; drawings do not. A click selects one candle and a drag selects an interval. Records separate:
@@ -104,6 +112,8 @@ Movement selection snaps to displayed candle timestamps; drawings do not. A clic
 3. Candidate automation hypothesis and its research status.
 
 The analysis cutoff records the information the researcher intends to consider. It does not hide future candles or remove hindsight bias.
+
+Shared history displays the saved market context and provides client-side case-insensitive, accent-insensitive substring search across the already loaded analysis fields. Clearing the query restores the repository's original history ordering.
 
 Chart timestamps are exchange-local wall-clock values projected into Unix seconds through UTC solely to preserve the chart's original displayed clock. They are not assertions about the source feed's timezone semantics.
 
@@ -121,7 +131,7 @@ Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Never use a ser
 
 1. In Supabase Authentication → Providers, keep the Email provider enabled with password authentication. The Explorer does not call public sign-up; if accounts are provisioned separately, disable new-user sign-ups in the Dashboard as an additional safeguard.
 2. Set the local Site URL or add `http://localhost:5173/` to the permitted Redirect URLs so password-recovery links can return to the Explorer. Add the final GitHub Pages project URL only after redistribution and deployment approval.
-3. Review and run [the research migration](supabase/migrations/202609220001_research_annotations.sql), followed by [the private candle Storage migration](supabase/migrations/202609220002_private_candle_storage.sql), in the Supabase SQL editor. For replay analyses, then manually apply [the additive replay-analysis migration](supabase/migrations/202609230001_replay_analyses.sql). Existing rows receive the `retrospective` default; the migration does not change grants or RLS policies.
+3. Review and run [the research migration](supabase/migrations/202609220001_research_annotations.sql), followed by [the private candle Storage migration](supabase/migrations/202609220002_private_candle_storage.sql), in the Supabase SQL editor. Then manually apply [the additive replay-analysis migration](supabase/migrations/202609230001_replay_analyses.sql) and [the additive 2-minute timeframe migration](supabase/migrations/202609250001_add_two_minute_timeframe.sql). Existing rows remain valid; neither additive migration changes grants or RLS policies.
 4. Existing magic-link users should sign out, enter the same email address, and choose **Definir ou recuperar senha**. The recovery link updates that existing `auth.users` identity; it does not create a second account, change its user ID, or replace its `research_members` row.
 5. New accounts must be provisioned through an explicitly controlled Supabase administration workflow before they can request recovery. Then add only the intended identities to `research_members` using the reviewed SQL at the bottom of the migration.
 6. Review the project password policy and recovery-email template in the Dashboard. The Supabase policy remains authoritative; the frontend only confirms that both entered passwords match.
