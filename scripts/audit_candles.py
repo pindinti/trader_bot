@@ -26,8 +26,10 @@ SOURCE_COLUMNS = {
     "PrecoNegocio",
     "QuantidadeNegociada",
     "HoraFechamento",
+    "CodigoIdentificadorNegocio",
     "TipoSessaoPregao",
     "DataNegocio",
+    "TipoDoCanal",
 }
 CANDLE_COLUMNS = {"datetime", "contract", "open", "high", "low", "close", "volume", "trades"}
 SOURCE_TIME_RE = re.compile(r"^\d{9}$")
@@ -98,6 +100,13 @@ def parse_positive_int(value: str, field: str) -> int:
     return number
 
 
+def parse_identity_number(value: str, field: str) -> str:
+    text = (value or "").strip()
+    if not text.isascii() or not INTEGER_RE.fullmatch(text) or int(text) <= 0:
+        raise ValueError(f"{field} must be a positive integer, got {text!r}")
+    return str(int(text))
+
+
 def empty_result(source_path: Path, contract: str) -> dict[str, Any]:
     return {
         "date": None,
@@ -105,6 +114,9 @@ def empty_result(source_path: Path, contract: str) -> dict[str, Any]:
         "source_file": str(source_path),
         "candle_file": None,
         "status": "FAIL",
+        "source_selected_row_count": 0,
+        "source_new_trade_count": 0,
+        "source_cancelled_trade_count": 0,
         "source_trade_count": 0,
         "source_quantity_sum": 0,
         "expected_candle_count": 0,
@@ -127,7 +139,10 @@ def empty_result(source_path: Path, contract: str) -> dict[str, Any]:
         "errors": [],
         "mismatches": [],
         "diagnostic_samples": [],
-        "ordering_assumption": "timestamp, then original source row number; trade identifiers are unused",
+        "ordering_assumption": (
+            "final active New trades after identity-scoped cancellations; "
+            "original New timestamp, then original source row number"
+        ),
     }
 
 
@@ -140,6 +155,9 @@ def read_expected(source_path: Path, contract: str, result: dict[str, Any]) -> d
     expected: dict[datetime, dict[str, Any]] = {}
     trade_dates: set[date] = set()
     previous_time: datetime | None = None
+    active: dict[tuple[date, str, str, str, str], dict[str, Any]] = {}
+    seen_new: set[tuple[date, str, str, str, str]] = set()
+    cancelled: set[tuple[date, str, str, str, str]] = set()
 
     try:
         source = source_path.open("r", encoding="utf-8-sig", newline="")
@@ -155,13 +173,31 @@ def read_expected(source_path: Path, contract: str, result: dict[str, Any]) -> d
             return expected
 
         for line_number, row in enumerate(reader, 2):
-            if (row.get("CodigoInstrumento") or "").strip().upper() != contract:
+            instrument = (row.get("CodigoInstrumento") or "").strip().upper()
+            if instrument != contract:
                 continue
+            result["source_selected_row_count"] += 1
             row_errors: list[str] = []
-            if (row.get("AcaoAtualizacao") or "").strip() != "0":
-                row_errors.append(f"unsupported AcaoAtualizacao {row.get('AcaoAtualizacao')!r}")
-            if (row.get("TipoSessaoPregao") or "").strip() != "1":
+            action = (row.get("AcaoAtualizacao") or "").strip()
+            if action not in {"0", "2"}:
+                row_errors.append(
+                    f"unsupported AcaoAtualizacao {row.get('AcaoAtualizacao')!r}; expected '0' or '2'"
+                )
+            session = (row.get("TipoSessaoPregao") or "").strip()
+            if session != "1":
                 row_errors.append(f"unsupported TipoSessaoPregao {row.get('TipoSessaoPregao')!r}")
+
+            trade_identifier = channel = None
+            try:
+                trade_identifier = parse_identity_number(
+                    row.get("CodigoIdentificadorNegocio"), "CodigoIdentificadorNegocio"
+                )
+            except ValueError as exc:
+                row_errors.append(str(exc))
+            try:
+                channel = parse_identity_number(row.get("TipoDoCanal"), "TipoDoCanal")
+            except ValueError as exc:
+                row_errors.append(str(exc))
 
             reference_date = trading_date = timestamp = price = quantity = None
             try:
@@ -192,47 +228,115 @@ def read_expected(source_path: Path, contract: str, result: dict[str, Any]) -> d
                 add_limited(result["errors"], f"{source_path.name}:{line_number}: {'; '.join(row_errors)}")
                 continue
 
-            assert trading_date is not None and timestamp is not None and price is not None and quantity is not None
+            assert (
+                action in {"0", "2"}
+                and trading_date is not None
+                and timestamp is not None
+                and price is not None
+                and quantity is not None
+                and trade_identifier is not None
+                and channel is not None
+            )
             trade_dates.add(trading_date)
-            result["source_trade_count"] += 1
-            result["source_quantity_sum"] += quantity
             if previous_time is not None and timestamp < previous_time:
                 result["source_out_of_order_count"] += 1
             previous_time = timestamp
-            first = result["source_first_timestamp"]
-            last = result["source_last_timestamp"]
-            if first is None or timestamp < first:
-                result["source_first_timestamp"] = timestamp
-            if last is None or timestamp > last:
-                result["source_last_timestamp"] = timestamp
 
-            minute = timestamp.replace(second=0, microsecond=0)
-            order_key = (timestamp, line_number)
-            candle = expected.get(minute)
-            if candle is None:
-                expected[minute] = {
-                    "timestamp": minute,
-                    "contract": contract,
-                    "open": price,
-                    "high": price,
-                    "low": price,
-                    "close": price,
-                    "volume": quantity,
-                    "trades": 1,
-                    "first_key": order_key,
-                    "last_key": order_key,
+            identity = (trading_date, instrument, session, channel, trade_identifier)
+            if action == "0":
+                result["source_new_trade_count"] += 1
+                if identity in seen_new:
+                    add_limited(
+                        result["errors"],
+                        f"{source_path.name}:{line_number}: duplicate New trade identity "
+                        f"{trade_identifier!r} within date/instrument/session/channel scope",
+                    )
+                    continue
+                seen_new.add(identity)
+                active[identity] = {
+                    "timestamp": timestamp,
+                    "line_number": line_number,
+                    "price": price,
+                    "quantity": quantity,
                 }
-            else:
-                if order_key < candle["first_key"]:
-                    candle["first_key"] = order_key
-                    candle["open"] = price
-                if order_key > candle["last_key"]:
-                    candle["last_key"] = order_key
-                    candle["close"] = price
-                candle["high"] = max(candle["high"], price)
-                candle["low"] = min(candle["low"], price)
-                candle["volume"] += quantity
-                candle["trades"] += 1
+                continue
+
+            if identity in cancelled:
+                add_limited(
+                    result["errors"],
+                    f"{source_path.name}:{line_number}: duplicate Delete for trade identity "
+                    f"{trade_identifier!r}",
+                )
+                continue
+            original = active.get(identity)
+            if original is None:
+                add_limited(
+                    result["errors"],
+                    f"{source_path.name}:{line_number}: unmatched Delete (or Delete before New) "
+                    f"for trade identity {trade_identifier!r}",
+                )
+                continue
+            delete_errors: list[str] = []
+            if timestamp < original["timestamp"]:
+                delete_errors.append("Delete timestamp precedes the original New timestamp")
+            if price != original["price"]:
+                delete_errors.append(
+                    f"Delete price {decimal_text(price)} differs from New price "
+                    f"{decimal_text(original['price'])}"
+                )
+            if quantity != original["quantity"]:
+                delete_errors.append(
+                    f"Delete quantity {quantity} differs from New quantity {original['quantity']}"
+                )
+            if delete_errors:
+                add_limited(
+                    result["errors"],
+                    f"{source_path.name}:{line_number}: {'; '.join(delete_errors)}",
+                )
+                continue
+            del active[identity]
+            cancelled.add(identity)
+            result["source_cancelled_trade_count"] += 1
+
+    active_rows = list(active.values())
+    result["source_trade_count"] = len(active_rows)
+    result["source_quantity_sum"] = sum(row["quantity"] for row in active_rows)
+    if active_rows:
+        result["source_first_timestamp"] = min(row["timestamp"] for row in active_rows)
+        result["source_last_timestamp"] = max(row["timestamp"] for row in active_rows)
+
+    for trade in active_rows:
+        timestamp = trade["timestamp"]
+        price = trade["price"]
+        quantity = trade["quantity"]
+        line_number = trade["line_number"]
+        minute = timestamp.replace(second=0, microsecond=0)
+        order_key = (timestamp, line_number)
+        candle = expected.get(minute)
+        if candle is None:
+            expected[minute] = {
+                "timestamp": minute,
+                "contract": contract,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": quantity,
+                "trades": 1,
+                "first_key": order_key,
+                "last_key": order_key,
+            }
+        else:
+            if order_key < candle["first_key"]:
+                candle["first_key"] = order_key
+                candle["open"] = price
+            if order_key > candle["last_key"]:
+                candle["last_key"] = order_key
+                candle["close"] = price
+            candle["high"] = max(candle["high"], price)
+            candle["low"] = min(candle["low"], price)
+            candle["volume"] += quantity
+            candle["trades"] += 1
 
     if len(trade_dates) != 1:
         rendered = ", ".join(sorted(item.isoformat() for item in trade_dates)) or "none"
@@ -485,6 +589,11 @@ def write_report(report_path: Path, report: dict[str, Any]) -> None:
 
 def print_result(result: dict[str, Any]) -> None:
     print(f"\n[{result['status']}] {result['date'] or Path(result['source_file']).name}")
+    print(
+        f"  Source rows/new/cancelled/active: {result['source_selected_row_count']:,} / "
+        f"{result['source_new_trade_count']:,} / {result['source_cancelled_trade_count']:,} / "
+        f"{result['source_trade_count']:,}"
+    )
     print(
         f"  Source trades/quantity: {result['source_trade_count']:,} / {result['source_quantity_sum']:,} | "
         f"Candles expected/actual: {result['expected_candle_count']:,} / {result['actual_candle_count']:,}"

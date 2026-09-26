@@ -24,13 +24,27 @@ REQUIRED_COLUMNS = {
     "PrecoNegocio",
     "QuantidadeNegociada",
     "HoraFechamento",
+    "CodigoIdentificadorNegocio",
     "TipoSessaoPregao",
     "DataNegocio",
+    "TipoDoCanal",
 }
 TIMESTAMP_PATTERN = re.compile(r"^\d{9}$")
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 CONTRACT_PATTERN = re.compile(r"^[A-Z0-9]+$")
 MAX_REPORTED_ERRORS = 20
+
+TradeIdentity = tuple[date, str, str, str, str]
+
+
+@dataclass(frozen=True)
+class ActiveTrade:
+    identity: TradeIdentity
+    timestamp: datetime
+    row_number: int
+    price: Decimal
+    quantity: int
+    trade_date: date
 
 
 @dataclass
@@ -66,6 +80,10 @@ class ProcessingSummary:
     contract: str
     input_rows: int = 0
     selected_rows: int = 0
+    new_trade_count: int = 0
+    cancelled_trade_count: int = 0
+    active_trade_count: int = 0
+    # Compatibility alias: accepted trades means final active New trades.
     accepted_trades: int = 0
     candle_count: int = 0
     first_timestamp: datetime | None = None
@@ -154,13 +172,43 @@ def decimal_text(value: Decimal) -> str:
     return text
 
 
-def _validate_selected_row(row: dict[str, str], row_number: int) -> tuple[datetime, Decimal, int, date]:
+def _parse_positive_identifier(value: str, field_name: str) -> str:
+    text = (value or "").strip()
+    if not text.isascii() or not text.isdigit() or int(text) <= 0:
+        raise ValueError(f"{field_name} must be a positive integer, got {text!r}")
+    return str(int(text))
+
+
+def _validate_selected_row(
+    row: dict[str, str], row_number: int
+) -> tuple[str, TradeIdentity, datetime, Decimal, int, date]:
     errors: list[str] = []
 
-    if (row["AcaoAtualizacao"] or "").strip() != "0":
-        errors.append(f"unsupported AcaoAtualizacao {row['AcaoAtualizacao']!r}; only '0' is accepted")
-    if (row["TipoSessaoPregao"] or "").strip() != "1":
+    action = (row["AcaoAtualizacao"] or "").strip()
+    if action not in {"0", "2"}:
+        errors.append(
+            f"unsupported AcaoAtualizacao {row['AcaoAtualizacao']!r}; only '0' and '2' are accepted"
+        )
+
+    instrument = (row["CodigoInstrumento"] or "").strip().upper()
+    if not CONTRACT_PATTERN.fullmatch(instrument):
+        errors.append(f"invalid CodigoInstrumento {row['CodigoInstrumento']!r}")
+
+    session = (row["TipoSessaoPregao"] or "").strip()
+    if session != "1":
         errors.append(f"unsupported TipoSessaoPregao {row['TipoSessaoPregao']!r}; only '1' is accepted")
+
+    trade_identifier = channel = None
+    try:
+        trade_identifier = _parse_positive_identifier(
+            row["CodigoIdentificadorNegocio"], "CodigoIdentificadorNegocio"
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        channel = _parse_positive_identifier(row["TipoDoCanal"], "TipoDoCanal")
+    except ValueError as exc:
+        errors.append(str(exc))
 
     reference_date = trade_date = None
     timestamp = price = quantity = None
@@ -201,8 +249,43 @@ def _validate_selected_row(row: dict[str, str], row_number: int) -> tuple[dateti
 
     if errors:
         raise ValueError("; ".join(errors))
-    assert timestamp is not None and price is not None and quantity is not None and trade_date is not None
-    return timestamp, price, quantity, trade_date
+    assert (
+        action in {"0", "2"}
+        and trade_identifier is not None
+        and channel is not None
+        and timestamp is not None
+        and price is not None
+        and quantity is not None
+        and trade_date is not None
+    )
+    identity = (trade_date, instrument, session, channel, trade_identifier)
+    return action, identity, timestamp, price, quantity, trade_date
+
+
+def _aggregate_active_trades(
+    active_trades: dict[TradeIdentity, ActiveTrade], contract: str
+) -> dict[datetime, Candle]:
+    candles: dict[datetime, Candle] = {}
+    for trade in active_trades.values():
+        minute = trade.timestamp.replace(second=0, microsecond=0)
+        order_key = (trade.timestamp, trade.row_number)
+        candle = candles.get(minute)
+        if candle is None:
+            candles[minute] = Candle(
+                timestamp=minute,
+                contract=contract,
+                open=trade.price,
+                high=trade.price,
+                low=trade.price,
+                close=trade.price,
+                volume=trade.quantity,
+                trades=1,
+                first_key=order_key,
+                last_key=order_key,
+            )
+        else:
+            candle.add(trade.timestamp, trade.row_number, trade.price, trade.quantity)
+    return candles
 
 
 def _write_candles(output_path: Path, candles: dict[datetime, Candle]) -> None:
@@ -238,7 +321,9 @@ def process_file(input_path: Path, output_dir: Path, contract: str = "WDOV26") -
         raise ValueError("contract must contain only ASCII letters and digits")
 
     summary = ProcessingSummary(input_path=input_path, contract=contract)
-    candles: dict[datetime, Candle] = {}
+    active_trades: dict[TradeIdentity, ActiveTrade] = {}
+    seen_new_identities: set[TradeIdentity] = set()
+    cancelled_identities: set[TradeIdentity] = set()
     previous_timestamp: datetime | None = None
 
     try:
@@ -263,7 +348,9 @@ def process_file(input_path: Path, output_dir: Path, contract: str = "WDOV26") -
             summary.selected_rows += 1
 
             try:
-                timestamp, price, quantity, trade_date = _validate_selected_row(row, row_number)
+                action, identity, timestamp, price, quantity, trade_date = _validate_selected_row(
+                    row, row_number
+                )
             except (KeyError, ValueError) as exc:
                 summary.add_error(row_number, str(exc))
                 continue
@@ -278,35 +365,79 @@ def process_file(input_path: Path, output_dir: Path, contract: str = "WDOV26") -
             if summary.last_timestamp is None or timestamp > summary.last_timestamp:
                 summary.last_timestamp = timestamp
 
-            minute = timestamp.replace(second=0, microsecond=0)
-            candle = candles.get(minute)
-            if candle is None:
-                order_key = (timestamp, row_number)
-                candles[minute] = Candle(
-                    timestamp=minute,
-                    contract=contract,
-                    open=price,
-                    high=price,
-                    low=price,
-                    close=price,
-                    volume=quantity,
-                    trades=1,
-                    first_key=order_key,
-                    last_key=order_key,
+            if action == "0":
+                summary.new_trade_count += 1
+                if identity in seen_new_identities:
+                    summary.add_error(
+                        row_number,
+                        "duplicate New trade identity "
+                        f"{identity[-1]!r} within date/instrument/session/channel scope",
+                    )
+                    continue
+                seen_new_identities.add(identity)
+                active_trades[identity] = ActiveTrade(
+                    identity=identity,
+                    timestamp=timestamp,
+                    row_number=row_number,
+                    price=price,
+                    quantity=quantity,
+                    trade_date=trade_date,
                 )
-            else:
-                candle.add(timestamp, row_number, price, quantity)
-            summary.accepted_trades += 1
+                continue
+
+            if identity in cancelled_identities:
+                summary.add_error(
+                    row_number,
+                    f"duplicate Delete for trade identity {identity[-1]!r}",
+                )
+                continue
+            original = active_trades.get(identity)
+            if original is None:
+                summary.add_error(
+                    row_number,
+                    "unmatched Delete (or Delete before New) for trade identity "
+                    f"{identity[-1]!r} within date/instrument/session/channel scope",
+                )
+                continue
+            delete_errors: list[str] = []
+            if timestamp < original.timestamp:
+                delete_errors.append("Delete timestamp precedes the original New timestamp")
+            if price != original.price:
+                delete_errors.append(
+                    f"Delete price {decimal_text(price)} differs from New price "
+                    f"{decimal_text(original.price)}"
+                )
+            if quantity != original.quantity:
+                delete_errors.append(
+                    f"Delete quantity {quantity} differs from New quantity {original.quantity}"
+                )
+            if delete_errors:
+                summary.add_error(row_number, "; ".join(delete_errors))
+                continue
+            del active_trades[identity]
+            cancelled_identities.add(identity)
+            summary.cancelled_trade_count += 1
 
     if len(summary.trade_dates) > 1:
         dates = ", ".join(sorted(value.isoformat() for value in summary.trade_dates))
         summary.add_error(None, f"selected records contain multiple DataNegocio values: {dates}")
 
+    summary.active_trade_count = len(active_trades)
+    summary.accepted_trades = summary.active_trade_count
+    candles = _aggregate_active_trades(active_trades, contract)
     summary.candle_count = len(candles)
+
+    if active_trades:
+        active_timestamps = [trade.timestamp for trade in active_trades.values()]
+        summary.first_timestamp = min(active_timestamps)
+        summary.last_timestamp = max(active_timestamps)
+    else:
+        summary.first_timestamp = None
+        summary.last_timestamp = None
     if summary.validation_error_count:
         raise FileProcessingError(summary)
 
-    if summary.accepted_trades:
+    if summary.active_trade_count:
         trade_date = next(iter(summary.trade_dates))
         output_path = output_dir / f"{trade_date.isoformat()}_{contract}_1min.csv"
         try:
@@ -323,7 +454,9 @@ def print_summary(summary: ProcessingSummary, failed: bool = False) -> None:
     print(f"\n[{status}] {summary.input_path.name}")
     print(f"  Input rows: {summary.input_rows:,}")
     print(f"  Selected-contract rows ({summary.contract}): {summary.selected_rows:,}")
-    print(f"  Accepted trades: {summary.accepted_trades:,}")
+    print(f"  New trade events: {summary.new_trade_count:,}")
+    print(f"  Cancelled trades: {summary.cancelled_trade_count:,}")
+    print(f"  Final active trades: {summary.active_trade_count:,}")
     print(f"  Candles: {summary.candle_count:,}")
     print(f"  First timestamp: {summary.first_timestamp or '-'}")
     print(f"  Last timestamp: {summary.last_timestamp or '-'}")
