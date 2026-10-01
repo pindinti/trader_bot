@@ -34,6 +34,7 @@ export function aggregateCandles(candles, intervalMinutes) {
         close: candle.close,
         volume: candle.volume,
         trades: candle.trades,
+        ...(Number.isFinite(candle.notional) ? { notional: candle.notional } : {}),
       };
       output.push(current);
       continue;
@@ -43,6 +44,10 @@ export function aggregateCandles(candles, intervalMinutes) {
     current.low = Math.min(current.low, candle.low);
     current.close = candle.close;
     current.volume += candle.volume;
+    if (Object.hasOwn(current, 'notional')) {
+      if (Number.isFinite(candle.notional)) current.notional += candle.notional;
+      else delete current.notional;
+    }
     current.trades += candle.trades;
   }
 

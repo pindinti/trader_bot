@@ -1,6 +1,9 @@
 import {
   DEFAULT_FIBONACCI_LEVELS,
+  DRAWING_LINE_WIDTH,
   createDrawing,
+  drawingRenderStyle,
+  drawingWithColor,
   drawingGeometry,
   hitTestDrawings,
   projectCoordinateTime,
@@ -8,14 +11,38 @@ import {
   serializeDrawings,
 } from './drawings.js';
 
-const DRAW_TOOLS = new Set(['horizontal', 'trend', 'fibonacci', 'rectangle']);
+const DRAW_TOOLS = new Set(['horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle']);
 const COLORS = {
-  normal: '#75a88e',
-  selected: '#d7ed62',
-  fill: 'rgba(117, 168, 142, 0.12)',
-  selection: 'rgba(184, 206, 69, 0.13)',
-  selectionBorder: 'rgba(184, 206, 69, 0.8)',
+  selected: 'rgba(215, 237, 98, 0.45)',
+  highlighted: 'rgba(243, 201, 105, 0.35)',
+  selection: 'rgba(184, 206, 69, 0.08)',
 };
+
+function colorWithAlpha(color, alphaHex) {
+  return `${color}${alphaHex}`;
+}
+
+export function drawingHandlesVisible(mode) {
+  return mode === 'edit';
+}
+
+export function movementSelectionRectangle(value, timeToX, intervalSeconds, width, height) {
+  if (!value || typeof timeToX !== 'function' || !Number.isFinite(intervalSeconds) || intervalSeconds <= 0) return null;
+  const startX = timeToX(value.startTimestamp);
+  const endX = timeToX(value.endTimestamp);
+  if (!Number.isFinite(startX) || !Number.isFinite(endX)) return null;
+  const nextX = timeToX(value.startTimestamp + intervalSeconds);
+  const halfBar = Number.isFinite(nextX) ? Math.max(1, Math.abs(nextX - startX) / 2) : 3;
+  const left = Math.max(0, Math.min(startX, endX) - halfBar);
+  const right = Math.min(width, Math.max(startX, endX) + halfBar);
+  return { x: left, y: 0, width: Math.max(0, right - left), height: Math.max(0, height) };
+}
+
+export function paintMovementSelection(context, rectangle) {
+  if (!rectangle) return;
+  context.fillStyle = COLORS.selection;
+  context.fillRect(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
+}
 
 function cloneAnchors(anchors) {
   return anchors.map((anchor) => ({ ...anchor }));
@@ -30,6 +57,7 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
 
   let drawings = [];
   let selectedId = null;
+  let highlightedId = null;
   let mode = 'navigate';
   let fibonacciLevels = [...DEFAULT_FIBONACCI_LEVELS];
   let pendingAnchors = [];
@@ -97,59 +125,69 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     render();
   }
 
-  function drawHandle(anchor, selected) {
+  function drawHandle(anchor, selected, color) {
     if (anchor.x === null || anchor.y === null) return;
     context.beginPath();
     context.arc(anchor.x, anchor.y, selected ? 5 : 3, 0, Math.PI * 2);
     context.fillStyle = '#091812';
     context.fill();
-    context.strokeStyle = selected ? COLORS.selected : COLORS.normal;
+    context.strokeStyle = selected ? '#d7ed62' : color;
     context.lineWidth = selected ? 2 : 1;
     context.stroke();
   }
 
   function drawItem(drawing, temporary = false) {
     const isSelected = drawing.id === selectedId && !temporary;
+    const isHighlighted = drawing.id === highlightedId && !temporary;
+    const style = drawingRenderStyle(drawing, { selected: isSelected, highlighted: isHighlighted });
     const geometry = drawingGeometry(drawing, project, container.clientWidth);
     context.save();
-    context.strokeStyle = isSelected ? COLORS.selected : COLORS.normal;
-    context.fillStyle = COLORS.fill;
-    context.lineWidth = isSelected ? 2 : 1.25;
+    context.strokeStyle = style.color;
+    context.fillStyle = colorWithAlpha(style.color, '1f');
+    context.lineWidth = style.lineWidth;
+    context.shadowColor = isHighlighted ? COLORS.highlighted : isSelected ? COLORS.selected : 'transparent';
+    context.shadowBlur = isHighlighted ? 4 : isSelected ? 3 : 0;
     context.setLineDash(temporary ? [5, 4] : []);
     for (const segment of geometry.segments) {
       context.beginPath();
       context.moveTo(segment.start.x, segment.start.y);
       context.lineTo(segment.end.x, segment.end.y);
       context.stroke();
+      if (drawing.type === 'arrow') {
+        const angle = Math.atan2(segment.end.y - segment.start.y, segment.end.x - segment.start.x);
+        const size = 9 + style.lineWidth;
+        context.beginPath();
+        context.moveTo(segment.end.x, segment.end.y);
+        context.lineTo(segment.end.x - size * Math.cos(angle - Math.PI / 6), segment.end.y - size * Math.sin(angle - Math.PI / 6));
+        context.moveTo(segment.end.x, segment.end.y);
+        context.lineTo(segment.end.x - size * Math.cos(angle + Math.PI / 6), segment.end.y - size * Math.sin(angle + Math.PI / 6));
+        context.stroke();
+      }
       if (drawing.type === 'fibonacci') {
-        context.fillStyle = isSelected ? COLORS.selected : COLORS.normal;
+        context.fillStyle = style.color;
         context.font = '10px monospace';
         context.fillText(`${(segment.level * 100).toFixed(1)}% · ${segment.price.toFixed(1)}`, Math.min(segment.start.x, segment.end.x) + 5, segment.start.y - 4);
-        context.fillStyle = COLORS.fill;
+        context.fillStyle = colorWithAlpha(style.color, '1f');
       }
     }
     for (const rectangle of geometry.rectangles) {
       context.fillRect(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
       context.strokeRect(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
     }
-    geometry.anchors.forEach((anchor) => drawHandle(anchor, isSelected || temporary));
+    if (drawingHandlesVisible(mode) && !temporary) {
+      geometry.anchors.forEach((anchor) => drawHandle(anchor, isSelected, style.color));
+    }
     context.restore();
   }
 
   function drawSelection(value) {
-    if (!value) return;
-    const startX = chart.timeScale().timeToCoordinate(value.startTimestamp);
-    const endX = chart.timeScale().timeToCoordinate(value.endTimestamp);
-    if (startX === null || endX === null) return;
-    const left = Math.min(startX, endX);
-    const width = Math.max(2, Math.abs(endX - startX));
-    context.fillStyle = COLORS.selection;
-    context.fillRect(left, 0, width, container.clientHeight - 27);
-    context.strokeStyle = COLORS.selectionBorder;
-    context.lineWidth = 1;
-    context.setLineDash([4, 4]);
-    context.strokeRect(left, 0, width, container.clientHeight - 27);
-    context.setLineDash([]);
+    paintMovementSelection(context, movementSelectionRectangle(
+      value,
+      project.timeToX,
+      getIntervalSeconds(),
+      container.clientWidth,
+      container.clientHeight - 27,
+    ));
   }
 
   function render() {
@@ -297,7 +335,12 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     setMode,
     getMode: () => mode,
     setFibonacciLevels(levels) { fibonacciLevels = [...levels]; },
-    setDrawings(value) { drawings = serializeDrawings(value); setSelected(null); render(); },
+    setDrawings(value) {
+      drawings = serializeDrawings(value);
+      highlightedId = null;
+      setSelected(null);
+      render();
+    },
     getDrawings: () => serializeDrawings(drawings),
     deleteSelected() {
       if (!selectedId) return false;
@@ -305,6 +348,32 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
       setSelected(null);
       onDrawingsChange?.(serializeDrawings(drawings));
       return true;
+    },
+    adjustSelectedLineWidth(delta) {
+      const drawing = drawings.find((item) => item.id === selectedId);
+      if (!drawing || !Number.isFinite(delta)) return false;
+      drawing.lineWidth = Math.min(
+        DRAWING_LINE_WIDTH.max,
+        Math.max(DRAWING_LINE_WIDTH.min, drawing.lineWidth + delta),
+      );
+      onDrawingsChange?.(serializeDrawings(drawings));
+      onSelectedChange?.(serializeDrawings([drawing])[0]);
+      render();
+      return true;
+    },
+    setSelectedColor(color) {
+      const index = drawings.findIndex((item) => item.id === selectedId);
+      if (index < 0) return false;
+      drawings[index] = drawingWithColor(drawings[index], color);
+      onDrawingsChange?.(serializeDrawings(drawings));
+      onSelectedChange?.(serializeDrawings([drawings[index]])[0]);
+      render();
+      return true;
+    },
+    highlightDrawing(id) {
+      highlightedId = drawings.some((drawing) => drawing.id === id) ? id : null;
+      render();
+      return highlightedId !== null;
     },
     setSelection(value) { selection = value ? { ...value } : null; render(); },
     getSelection: () => selection ? { ...selection } : null,

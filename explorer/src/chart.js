@@ -7,7 +7,7 @@ import {
   createChart,
 } from 'lightweight-charts';
 import { createDrawingOverlay } from './drawing-overlay.js';
-import { projectTimeCoordinate } from './drawings.js';
+import { INDICATOR_STYLES } from './indicators.js';
 
 const COLORS = {
   ink: '#dce8df',
@@ -84,7 +84,7 @@ export function replaceChartData({ timeScale, candleSeries, volumeSeries, candle
   else timeScale.fitContent();
 }
 
-export function createMarketChart(container, researchBand, callbacks = {}) {
+export function createMarketChart(container, callbacks = {}) {
   let dayBoundaryTimes = new Set();
   const chart = createChart(container, {
     autoSize: true,
@@ -135,19 +135,11 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
   }, 0);
   chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
-  const movingAverageStyles = {
-    'sma-9': { color: '#f3c969', lineWidth: 1 },
-    'sma-21': { color: '#db8f55', lineWidth: 1 },
-    'sma-200': { color: '#dd6673', lineWidth: 2 },
-    'ema-9': { color: '#70d9d2', lineWidth: 1 },
-    'ema-21': { color: '#5fa9ef', lineWidth: 1 },
-    'ema-200': { color: '#ab83e8', lineWidth: 2 },
-  };
-  const movingAverageSeries = Object.fromEntries(Object.entries(movingAverageStyles).map(([key, options]) => [
+  const indicatorSeries = Object.fromEntries(Object.entries(INDICATOR_STYLES).map(([key, { color, lineWidth }]) => [
     key,
     chart.addSeries(LineSeries, {
-      ...options,
-      title: key.toUpperCase().replace('-', ' '),
+      color,
+      lineWidth,
       lastValueVisible: false,
       priceLineVisible: false,
       crosshairMarkerVisible: false,
@@ -156,34 +148,11 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
 
   let candleLookup = new Map();
   let currentCandles = [];
-  let researchStart = null;
-  let researchEnd = null;
   let intervalSeconds = 60;
-
-  function updateBand() {
-    if (!researchStart || !researchEnd) return;
-    const coordinate = (time) => projectTimeCoordinate(time, currentCandles, (value) => chart.timeScale().timeToCoordinate(value));
-    const startX = coordinate(researchStart);
-    const endX = coordinate(researchEnd);
-    if (startX === null || endX === null) {
-      researchBand.hidden = true;
-      return;
-    }
-    const left = Math.max(0, startX);
-    const right = Math.min(container.clientWidth, endX);
-    researchBand.hidden = right <= 0 || left >= container.clientWidth || right <= left;
-    researchBand.style.left = `${left}px`;
-    researchBand.style.width = `${Math.max(0, right - left)}px`;
-  }
-
-  chart.timeScale().subscribeVisibleLogicalRangeChange(updateBand);
   chart.subscribeCrosshairMove((param) => {
     if (!param.time) return callbacks.onHover?.(null);
     callbacks.onHover?.(candleLookup.get(Number(param.time)) ?? null);
   });
-  const resizeObserver = new ResizeObserver(updateBand);
-  resizeObserver.observe(container);
-
   const drawings = createDrawingOverlay({
     container,
     chart,
@@ -197,7 +166,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
   });
 
   return {
-    setData(candles, researchWindow, { preserveViewport = false, sourceIntervalSeconds = 60, movingAverages = {} } = {}) {
+    setData(candles, { preserveViewport = false, sourceIntervalSeconds = 60, indicators = {} } = {}) {
       const projectedLogicalRange = preserveViewport === 'time'
         ? reprojectLogicalRange(
           chart.timeScale().getVisibleLogicalRange(),
@@ -219,10 +188,7 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
         preserveViewport,
         projectedLogicalRange,
       });
-      Object.entries(movingAverageSeries).forEach(([key, series]) => series.setData(movingAverages[key] ?? []));
-      researchStart = researchWindow.start;
-      researchEnd = researchWindow.end;
-      requestAnimationFrame(updateBand);
+      Object.entries(indicatorSeries).forEach(([key, series]) => series.setData(indicators[key] ?? []));
       requestAnimationFrame(drawings.redraw);
     },
     setMode: drawings.setMode,
@@ -230,6 +196,9 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
     setDrawings: drawings.setDrawings,
     getDrawings: drawings.getDrawings,
     deleteSelectedDrawing: drawings.deleteSelected,
+    adjustSelectedDrawingLineWidth: drawings.adjustSelectedLineWidth,
+    setSelectedDrawingColor: drawings.setSelectedColor,
+    highlightDrawing: drawings.highlightDrawing,
     setSelection: drawings.setSelection,
     getSelection: drawings.getSelection,
     focusRange(startTimestamp, endTimestamp) {
@@ -237,7 +206,6 @@ export function createMarketChart(container, researchBand, callbacks = {}) {
       chart.timeScale().setVisibleRange({ from: startTimestamp - padding, to: endTimestamp + padding });
     },
     destroy() {
-      resizeObserver.disconnect();
       drawings.destroy();
       chart.remove();
     },

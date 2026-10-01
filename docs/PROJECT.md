@@ -24,11 +24,11 @@ See [the Explorer README](../explorer/README.md) and [the research migration](..
 
 The repository currently provides:
 
-- A local Python pipeline that filters WDO trades, builds one-minute OHLCV candles, independently audits them, and exports only explicitly selected dates that have a passing audit.
+- A local Python pipeline that filters WDO trades, resolves B3 cancellations, builds one-minute OHLCV candles with exact trade notional, independently audits them, and exports only explicitly selected dates that have a passing audit.
 - A compact manifest plus one JSON object per contract and trading day, staged locally for manual upload to private Supabase Storage.
 - An authenticated Explorer with one-, two-, five-, ten-, fifteen-, thirty-, and sixty-minute views derived from audited one-minute candles.
-- Optional SMA and EMA overlays for 9, 21, and 200 completed active-timeframe closes, with private prior-session warmup kept separate from replay market data.
-- Interactive chart navigation, OHLCV inspection, a visible 10:30–15:00 research window, movement selection, and schema-version-1 drawings.
+- Optional SMA and EMA overlays for 9, 21, and 200 completed active-timeframe closes plus exact session VWAP, with private prior-session warmup kept separate from replay market data.
+- Interactive chart navigation, numbered-candle inspection, movement selection, and schema-version-1 drawings including arrows and per-drawing line width.
 - Structured retrospective and replay analyses, searchable shared history with market context, author-restricted editing/deletion, and JSON export of research records.
 - Deterministic replay over completed one-minute candles, timeframe-aware stepping, pause/play controls, replay snapshots, and restoration without later candles.
 - An experimental standalone same-candle false-breakout observer (definition v0.1) with synthetic deterministic tests and no chart or persistence integration.

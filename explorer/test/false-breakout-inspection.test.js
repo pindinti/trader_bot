@@ -79,6 +79,20 @@ test('loads and validates only explicitly selected manifest days', async (t) => 
   assert.equal(dataset.days[0].candles[0].open, 100);
 });
 
+test('loads schema-version-2 local exports without changing observer candles', async (t) => {
+  const date = '2026-01-02';
+  const { root, contract } = await fixture(t, [{ date, candles: [row(date, 0)] }]);
+  const v2Row = [...row(date, 0).slice(0, 6), '1000', row(date, 0).at(-1)];
+  await writeFile(join(root, 'manifest.json'), JSON.stringify({ ...manifest(contract, [{ date, count: 1 }]), schemaVersion: 2 }));
+  await writeFile(join(root, contract, `${date}.json`), JSON.stringify({
+    ...payload(contract, date, [v2Row]),
+    schemaVersion: 2,
+    columns: ['datetime', 'open', 'high', 'low', 'close', 'volume', 'notional', 'trades'],
+  }));
+  const dataset = await loadSelectedCandleDays({ inputDir: root, contract, dates: [date] });
+  assert.equal(dataset.days[0].candles[0].notional, 1000);
+});
+
 test('requires explicit selection and fails for missing contracts, dates, or files', async (t) => {
   const date = '2026-01-02';
   const { root, contract } = await fixture(t, [{ date, candles: [row(date, 0)], skipFile: true }]);
@@ -101,7 +115,7 @@ test('requires explicit selection and fails for missing contracts, dates, or fil
 test('fails clearly for malformed JSON, schema, and timestamps', async (t) => {
   const manifestDate = '2026-01-01';
   const badManifest = await fixture(t, [{ date: manifestDate, candles: [row(manifestDate, 0)] }]);
-  await writeFile(join(badManifest.root, 'manifest.json'), JSON.stringify({ schemaVersion: 2, contracts: [] }));
+  await writeFile(join(badManifest.root, 'manifest.json'), JSON.stringify({ schemaVersion: 3, contracts: [] }));
   await assert.rejects(
     loadSelectedCandleDays({ inputDir: badManifest.root, contract: badManifest.contract, dates: [manifestDate] }),
     /manifest has an incompatible/i,

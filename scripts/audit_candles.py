@@ -31,7 +31,7 @@ SOURCE_COLUMNS = {
     "DataNegocio",
     "TipoDoCanal",
 }
-CANDLE_COLUMNS = {"datetime", "contract", "open", "high", "low", "close", "volume", "trades"}
+CANDLE_COLUMNS = {"datetime", "contract", "open", "high", "low", "close", "volume", "notional", "trades"}
 SOURCE_TIME_RE = re.compile(r"^\d{9}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 OUTPUT_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
@@ -119,6 +119,7 @@ def empty_result(source_path: Path, contract: str) -> dict[str, Any]:
         "source_cancelled_trade_count": 0,
         "source_trade_count": 0,
         "source_quantity_sum": 0,
+        "source_notional_sum": Decimal("0"),
         "expected_candle_count": 0,
         "actual_candle_count": 0,
         "field_mismatch_count": 0,
@@ -132,6 +133,7 @@ def empty_result(source_path: Path, contract: str) -> dict[str, Any]:
         "candle_first_timestamp": None,
         "candle_last_timestamp": None,
         "source_quantity_matches": False,
+        "source_notional_matches": False,
         "source_trade_count_matches": False,
         "ohlc_invariant_error_count": 0,
         "gaps": [],
@@ -301,6 +303,9 @@ def read_expected(source_path: Path, contract: str, result: dict[str, Any]) -> d
     active_rows = list(active.values())
     result["source_trade_count"] = len(active_rows)
     result["source_quantity_sum"] = sum(row["quantity"] for row in active_rows)
+    result["source_notional_sum"] = sum(
+        (row["price"] * row["quantity"] for row in active_rows), Decimal("0")
+    )
     if active_rows:
         result["source_first_timestamp"] = min(row["timestamp"] for row in active_rows)
         result["source_last_timestamp"] = max(row["timestamp"] for row in active_rows)
@@ -322,6 +327,7 @@ def read_expected(source_path: Path, contract: str, result: dict[str, Any]) -> d
                 "low": price,
                 "close": price,
                 "volume": quantity,
+                "notional": price * quantity,
                 "trades": 1,
                 "first_key": order_key,
                 "last_key": order_key,
@@ -336,6 +342,7 @@ def read_expected(source_path: Path, contract: str, result: dict[str, Any]) -> d
             candle["high"] = max(candle["high"], price)
             candle["low"] = min(candle["low"], price)
             candle["volume"] += quantity
+            candle["notional"] += price * quantity
             candle["trades"] += 1
 
     if len(trade_dates) != 1:
@@ -388,6 +395,7 @@ def read_actual(candle_path: Path, result: dict[str, Any]) -> dict[datetime, lis
                     "low": parse_decimal(row.get("low"), "low", False),
                     "close": parse_decimal(row.get("close"), "close", False),
                     "volume": parse_positive_int(row.get("volume"), "volume"),
+                    "notional": parse_decimal(row.get("notional"), "notional", False),
                     "trades": parse_positive_int(row.get("trades"), "trades"),
                 }
             except ValueError as exc:
@@ -427,6 +435,7 @@ def public_candle(candle: dict[str, Any] | None) -> dict[str, Any] | None:
         "low": decimal_text(candle["low"]),
         "close": decimal_text(candle["close"]),
         "volume": candle["volume"],
+        "notional": decimal_text(candle["notional"]),
         "trades": candle["trades"],
     }
 
@@ -465,7 +474,7 @@ def compare(
     for timestamp in extra:
         add_limited(result["mismatches"], {"minute": str(timestamp), "field": "candle", "expected": "absent", "actual": "extra"})
 
-    fields = ("contract", "open", "high", "low", "close", "volume", "trades")
+    fields = ("contract", "open", "high", "low", "close", "volume", "notional", "trades")
     for timestamp in sorted(expected_times & actual_times):
         if len(actual[timestamp]) != 1:
             continue
@@ -487,6 +496,9 @@ def compare(
     actual_rows = [rows[0] for timestamp, rows in actual.items() if len(rows) == 1]
     result["source_trade_count_matches"] = sum(row["trades"] for row in actual_rows) == result["source_trade_count"]
     result["source_quantity_matches"] = sum(row["volume"] for row in actual_rows) == result["source_quantity_sum"]
+    result["source_notional_matches"] = sum(
+        (row["notional"] for row in actual_rows), Decimal("0")
+    ) == result["source_notional_sum"]
 
     sorted_times = sorted(actual)
     for earlier, later in zip(sorted_times, sorted_times[1:]):
@@ -556,6 +568,7 @@ def audit_file(
         + result["ohlc_invariant_error_count"]
         + (not result["source_trade_count_matches"])
         + (not result["source_quantity_matches"])
+        + (not result["source_notional_matches"])
     )
     result["status"] = "PASS" if integrity_failures == 0 else "FAIL"
     return serialize_result(result)
@@ -563,6 +576,8 @@ def audit_file(
 
 def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
     serialized = dict(result)
+    if isinstance(serialized.get("source_notional_sum"), Decimal):
+        serialized["source_notional_sum"] = decimal_text(serialized["source_notional_sum"])
     for key in (
         "source_first_timestamp",
         "source_last_timestamp",
@@ -598,6 +613,7 @@ def print_result(result: dict[str, Any]) -> None:
         f"  Source trades/quantity: {result['source_trade_count']:,} / {result['source_quantity_sum']:,} | "
         f"Candles expected/actual: {result['expected_candle_count']:,} / {result['actual_candle_count']:,}"
     )
+    print(f"  Source trade notional: {result['source_notional_sum']}")
     print(
         f"  Field mismatches: {result['field_mismatch_count']:,} | "
         f"Missing/extra: {result['missing_candle_count']:,}/{result['extra_candle_count']:,} | "

@@ -27,11 +27,12 @@ The application opens on a dedicated email/password authentication screen. The c
 From the repository root:
 
 ```powershell
+python scripts/build_candles.py --contract WDOV26
 python scripts/audit_candles.py
 python scripts/export_explorer.py --contract WDOV26 --dates 2026-09-14 2026-09-15 2026-09-16 2026-09-17 2026-09-18 2026-09-21
 ```
 
-The exporter writes the unchanged compact JSON schema to the ignored local staging directory `data/explorer_storage/`. Its object layout mirrors the private bucket:
+The exporter writes compact schema-version-2 JSON to the ignored local staging directory `data/explorer_storage/`. Each one-minute candle includes cancellation-resolved trade notional (`sum(price × quantity)`) in addition to OHLC, volume, and trade count; this makes session VWAP exact rather than an OHLC approximation. Its object layout mirrors the private bucket:
 
 ```text
 manifest.json
@@ -74,12 +75,15 @@ Drawings use schema version `1` and store actual chart timestamps and prices, ne
 
 - Horizontal line: one timestamp/price anchor; the price is rendered across the pane.
 - Trend line: two ordered timestamp/price anchors.
+- Arrow: two ordered timestamp/price anchors, with the arrowhead at the second anchor.
 - Rectangle: two opposite timestamp/price anchors.
 - Fibonacci: two ordered timestamp/price anchors and a per-drawing level array. The initial levels are `0, 0.236, 0.382, 0.5, 0.618, 0.786, 1`.
 
 Fibonacci uses `price = anchor1 + (anchor2 - anchor1) × level`. Reversing the anchors therefore reverses the retracement direction. The saved level array is part of each drawing.
 
 Drawing tools are one-shot and return to Navigate mode after completion. Edit mode deliberately captures pointer input so anchors or the whole drawing can be dragged; return to Navigate mode for chart pan/zoom. Escape cancels unfinished work and returns to navigation.
+
+Line width is stored per drawing. Existing schema-version-1 drawings without that property load with the quiet default width, so no drawing-schema migration is required. Highlighting a drawing from a linked analysis factor is temporary UI state and does not overwrite its persisted style.
 
 ## Candle replay
 
@@ -95,9 +99,11 @@ Playback uses a fixed local speed of one completed chart-timeframe candle every 
 
 Analyses created while replay is active are saved explicitly as **Análise em replay**, with the simulated timestamp, selected timeframe, and source position captured together after playback is paused. Opening one restores the same audited 1-minute prefix and never loads later candles into the chart. Existing records and analyses created with the complete day remain **Análise retrospectiva**. Replay is a research context, not a claim that the researcher had never previously seen the complete session.
 
-## Moving averages and historical context
+## Indicators and historical context
 
 The chart can show SMA or EMA overlays for 9, 21, and 200 completed candles of the active chart timeframe. All calculations use candle closes. An SMA starts only after `N` completed values. An EMA is seeded by the SMA of its first `N` completed closes and then uses `alpha = 2 / (N + 1)`. This is the Explorer's deterministic convention; byte-for-byte parity with Nelogica Profit has not yet been visually established.
+
+Session VWAP uses cumulative exact trade notional divided by cumulative quantity, resets for each trading session, and consumes only the completed candle prefix available in replay. Schema-version-1 candle exports remain readable, but VWAP is disabled for them because they do not carry exact notional. Indicator names, colors, and latest completed values appear in the external legend rather than over the candle pane.
 
 When an average is enabled, the Explorer follows the private manifest backward through available trading sessions for the same contract until it has the requested prior active-timeframe context or exhausts available history. Loaded days are cached for the protected Explorer session. Prior candles are visible on the chart, and date-boundary ticks use `DD/MM HH:mm`; ordinary ticks remain `HH:mm` under the existing exchange-wall-clock projection.
 
@@ -108,8 +114,10 @@ Warmup data never enters `getMarketView()`. During replay, indicators receive co
 Movement selection snaps to displayed candle timestamps; drawings do not. A click selects one candle and a drag selects an interval. Records separate:
 
 1. Observed contract/date/timeframe, selected timestamps, cutoff, and drawings.
-2. Trader interpretation: pattern, direction, context, factors, and assessment.
-3. Candidate automation hypothesis and its research status.
+2. Trader interpretation: setup, free description, direction, context, factors, descriptive trigger/order/stop/target, and assessment.
+3. Internal compatibility metadata. New records use `research_status = 'observation'` automatically; historical status values remain readable but are not part of the current descriptive workflow.
+
+New entries use the assessment vocabulary **Trade feito**, **Trade não feito**, **Considerar operação**, and **Descartar**. Legacy `wait` and `undetermined` values remain readable and editable without being offered for new entries. The legacy `candidate_rule` database value is retained on old rows but is omitted from current form, search, cards, and new writes.
 
 The analysis cutoff records the information the researcher intends to consider. It does not hide future candles or remove hindsight bias.
 
@@ -131,7 +139,7 @@ Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Never use a ser
 
 1. In Supabase Authentication → Providers, keep the Email provider enabled with password authentication. The Explorer does not call public sign-up; if accounts are provisioned separately, disable new-user sign-ups in the Dashboard as an additional safeguard.
 2. Set the local Site URL or add `http://localhost:5173/` to the permitted Redirect URLs so password-recovery links can return to the Explorer. Add the final GitHub Pages project URL only after redistribution and deployment approval.
-3. Review and run [the research migration](supabase/migrations/202609220001_research_annotations.sql), followed by [the private candle Storage migration](supabase/migrations/202609220002_private_candle_storage.sql), in the Supabase SQL editor. Then manually apply [the additive replay-analysis migration](supabase/migrations/202609230001_replay_analyses.sql) and [the additive 2-minute timeframe migration](supabase/migrations/202609250001_add_two_minute_timeframe.sql). Existing rows remain valid; neither additive migration changes grants or RLS policies.
+3. Review and run [the research migration](supabase/migrations/202609220001_research_annotations.sql), followed by [the private candle Storage migration](supabase/migrations/202609220002_private_candle_storage.sql), in the Supabase SQL editor. Then manually apply [the additive replay-analysis migration](supabase/migrations/202609230001_replay_analyses.sql), [the additive 2-minute timeframe migration](supabase/migrations/202609250001_add_two_minute_timeframe.sql), and [the additive Sprint 1.4 analysis-fields migration](supabase/migrations/202609300001_analysis_observation_fields.sql). Existing rows remain valid; none of these additive migrations changes grants or RLS policies.
 4. Existing magic-link users should sign out, enter the same email address, and choose **Definir ou recuperar senha**. The recovery link updates that existing `auth.users` identity; it does not create a second account, change its user ID, or replace its `research_members` row.
 5. New accounts must be provisioned through an explicitly controlled Supabase administration workflow before they can request recovery. Then add only the intended identities to `research_members` using the reviewed SQL at the bottom of the migration.
 6. Review the project password policy and recovery-email template in the Dashboard. The Supabase policy remains authoritative; the frontend only confirms that both entered passwords match.

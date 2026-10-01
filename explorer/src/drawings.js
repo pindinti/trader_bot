@@ -1,6 +1,16 @@
 export const DRAWING_SCHEMA_VERSION = 1;
 export const DEFAULT_FIBONACCI_LEVELS = Object.freeze([0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]);
-export const DRAWING_TYPES = Object.freeze(['horizontal', 'trend', 'fibonacci', 'rectangle']);
+export const DRAWING_TYPES = Object.freeze(['horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle']);
+export const DRAWING_LINE_WIDTH = Object.freeze({ default: 1.25, min: 0.5, max: 4, step: 0.25 });
+export const DRAWING_COLOR_PALETTE = Object.freeze([
+  Object.freeze({ value: '#75a88e', label: 'Verde sálvia' }),
+  Object.freeze({ value: '#d7ed62', label: 'Lima' }),
+  Object.freeze({ value: '#d8ae62', label: 'Âmbar' }),
+  Object.freeze({ value: '#70d9d2', label: 'Ciano' }),
+  Object.freeze({ value: '#5fa9ef', label: 'Azul' }),
+  Object.freeze({ value: '#dd6673', label: 'Rosa' }),
+]);
+export const DEFAULT_DRAWING_COLOR = DRAWING_COLOR_PALETTE[0].value;
 
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
@@ -21,6 +31,22 @@ export function validateAnchor(anchor) {
   return { time: Math.round(anchor.time), price: Number(anchor.price) };
 }
 
+export function normalizeDrawingLineWidth(value) {
+  if (value == null) return DRAWING_LINE_WIDTH.default;
+  const width = Number(value);
+  if (!finite(width)) throw new TypeError('Drawing line width must be finite');
+  return Math.min(DRAWING_LINE_WIDTH.max, Math.max(DRAWING_LINE_WIDTH.min, width));
+}
+
+export function normalizeDrawingColor(value) {
+  if (value == null) return DEFAULT_DRAWING_COLOR;
+  const color = String(value).toLowerCase();
+  if (!DRAWING_COLOR_PALETTE.some((item) => item.value === color)) {
+    throw new TypeError('Drawing color must belong to the supported palette');
+  }
+  return color;
+}
+
 export function createDrawing(type, anchors, options = {}) {
   if (!DRAWING_TYPES.includes(type)) throw new TypeError(`Unsupported drawing type: ${type}`);
   const requiredAnchors = type === 'horizontal' ? 1 : 2;
@@ -32,6 +58,8 @@ export function createDrawing(type, anchors, options = {}) {
     id: options.id || crypto.randomUUID(),
     type,
     anchors: anchors.map(validateAnchor),
+    lineWidth: normalizeDrawingLineWidth(options.lineWidth),
+    color: normalizeDrawingColor(options.color),
   };
   if (type === 'fibonacci') {
     drawing.levels = parseFibonacciLevels(options.levels ?? DEFAULT_FIBONACCI_LEVELS);
@@ -55,7 +83,27 @@ export function serializeDrawings(drawings) {
   return drawings.map((drawing) => createDrawing(drawing.type, drawing.anchors, {
     id: drawing.id,
     levels: drawing.levels,
+    lineWidth: drawing.lineWidth,
+    color: drawing.color,
   }));
+}
+
+export function drawingWithColor(drawing, color) {
+  return createDrawing(drawing.type, drawing.anchors, {
+    id: drawing.id,
+    levels: drawing.levels,
+    lineWidth: drawing.lineWidth,
+    color,
+  });
+}
+
+export function drawingRenderStyle(drawing, { selected = false, highlighted = false } = {}) {
+  const lineWidth = normalizeDrawingLineWidth(drawing?.lineWidth);
+  return {
+    color: normalizeDrawingColor(drawing?.color),
+    lineWidth: Math.min(DRAWING_LINE_WIDTH.max + 1.5, lineWidth + (highlighted ? 0.5 : selected ? 0.75 : 0)),
+    emphasis: highlighted ? 'highlighted' : selected ? 'selected' : 'normal',
+  };
 }
 
 export function distanceToSegment(point, start, end) {
@@ -134,7 +182,7 @@ export function drawingGeometry(drawing, project, width) {
   if (drawing.type === 'horizontal') {
     return { anchors, segments: [{ start: { x: 0, y: anchors[0].y }, end: { x: width, y: anchors[0].y } }], rectangles: [] };
   }
-  if (drawing.type === 'trend') {
+  if (drawing.type === 'trend' || drawing.type === 'arrow') {
     return { anchors, segments: [{ start: anchors[0], end: anchors[1] }], rectangles: [] };
   }
   if (drawing.type === 'rectangle') {

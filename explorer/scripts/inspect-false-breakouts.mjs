@@ -73,7 +73,7 @@ async function readJson(path, label) {
 
 function validateManifest(manifest) {
   if (
-    manifest?.schemaVersion !== 1
+    ![1, 2].includes(manifest?.schemaVersion)
     || manifest?.sourceTimeframeMinutes !== 1
     || !Array.isArray(manifest.contracts)
     || manifest.contracts.length === 0

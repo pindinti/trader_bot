@@ -8,8 +8,9 @@ export const DIRECTION_LABELS = Object.freeze({ long: 'Compra', short: 'Venda', 
 export const MARKET_CONTEXT_LABELS = Object.freeze({
   uptrend: 'Tendência de alta', downtrend: 'Tendência de baixa', sideways: 'Lateralização', transition: 'Transição / indefinido',
 });
-export const STATUS_LABELS = Object.freeze({
-  observation: 'Somente observação', candidate: 'Regra candidata', clarification: 'Precisa de esclarecimento', review: 'Pronta para revisão',
+export const ASSESSMENT_LABELS = Object.freeze({
+  trade_taken: 'Trade feito', trade_not_taken: 'Trade não feito', consider: 'Considerar operação', discard: 'Descartar',
+  wait: 'Aguardar confirmação (legado)', undetermined: 'Indeterminado (legado)',
 });
 
 export function normalizeHistorySearch(value) {
@@ -48,13 +49,36 @@ export function filterAnalysisHistory(records, query) {
     record.pattern, PATTERN_LABELS[record.pattern], record.patternDetail,
     record.direction, DIRECTION_LABELS[record.direction],
     record.marketContext, marketContextLabel(record), record.contextExplanation,
+    record.description, record.trigger, record.entryOrder, record.stop, record.target,
     record.assessment, record.assessmentExplanation,
     record.missingConfirmation, record.invalidationConditions,
-    record.candidateRule,
-    record.researchStatus, STATUS_LABELS[record.researchStatus],
     record.author?.display_name, record.author?.email,
     ...(record.factors ?? []).flatMap((factor) => [factor.type, factor.condition, factor.role]),
   ].join(' ')).includes(needle));
+}
+
+export function historyCardData(record) {
+  const pattern = record?.pattern === 'other' && String(record?.patternDetail ?? '').trim()
+    ? record.patternDetail.trim()
+    : (PATTERN_LABELS[record?.pattern] ?? record?.pattern ?? 'Estrutura não informada');
+  const context = marketContextLabel(record);
+  const interval = Number.isFinite(record?.startTimestamp) && Number.isFinite(record?.endTimestamp)
+    ? `${new Date(record.startTimestamp * 1000).toISOString().slice(11, 16)}–${new Date(record.endTimestamp * 1000).toISOString().slice(11, 16)}`
+    : 'intervalo não informado';
+  return Object.freeze({
+    setup: pattern,
+    context,
+    contextExplanation: String(record?.contextExplanation ?? '').trim(),
+    contractInterval: `${record?.contract ?? '—'} · ${interval}`,
+    dateTimeframe: `${String(record?.tradingDate ?? '').split('-').reverse().join('/')} · ${record?.timeframeMinutes ?? '—'}m`,
+  });
+}
+
+export async function deleteOwnedAnalysis({ record, userId, confirmDelete, deleteRecord }) {
+  if (!record?.id || record.authorId !== userId) throw new Error('Somente o autor pode excluir esta análise.');
+  if (!confirmDelete()) return false;
+  await deleteRecord(record.id);
+  return true;
 }
 
 export function canCreateAnalysis(selection, drawings) {

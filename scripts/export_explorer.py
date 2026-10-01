@@ -21,14 +21,14 @@ DEFAULT_CANDLE_DIR = BASE_DIR / "data" / "candles" / "1min"
 DEFAULT_AUDIT_DIR = BASE_DIR / "data" / "audit"
 DEFAULT_STORAGE_DATA_DIR = BASE_DIR / "data" / "explorer_storage"
 
-EXPECTED_COLUMNS = ("datetime", "contract", "open", "high", "low", "close", "volume", "trades")
+EXPECTED_COLUMNS = ("datetime", "contract", "open", "high", "low", "close", "volume", "notional", "trades")
 PRICE_FIELDS = ("open", "high", "low", "close")
 CONTRACT_RE = re.compile(r"^[A-Z0-9]+$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$")
 DECIMAL_RE = re.compile(r"^\d+(?:\.\d+)?$")
 INTEGER_RE = re.compile(r"^\d+$")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ExportError(ValueError):
@@ -41,6 +41,7 @@ class ValidatedDay:
     source_path: Path
     rows: list[list[Any]]
     volume: int
+    notional: Decimal
     trades: int
 
 
@@ -97,10 +98,10 @@ def load_audit(audit_path: Path, contract: str) -> dict[str, dict[str, Any]]:
 
     required_result = {
         "date", "contract", "candle_file", "status", "source_trade_count",
-        "source_quantity_sum", "expected_candle_count", "actual_candle_count",
+        "source_quantity_sum", "source_notional_sum", "expected_candle_count", "actual_candle_count",
         "field_mismatch_count", "missing_candle_count", "extra_candle_count",
         "duplicate_candle_count", "out_of_order_candle_count",
-        "source_quantity_matches", "source_trade_count_matches",
+        "source_quantity_matches", "source_notional_matches", "source_trade_count_matches",
         "ohlc_invariant_error_count", "errors", "mismatches",
     }
     by_date: dict[str, dict[str, Any]] = {}
@@ -133,7 +134,9 @@ def require_passing_audit(
         raise ExportError(f"audit contains invalid counts for {trading_date}")
     if record["expected_candle_count"] != record["actual_candle_count"]:
         raise ExportError(f"audit candle counts differ for {trading_date}")
-    if record["source_quantity_matches"] is not True or record["source_trade_count_matches"] is not True:
+    if (record["source_quantity_matches"] is not True
+            or record["source_notional_matches"] is not True
+            or record["source_trade_count_matches"] is not True):
         raise ExportError(f"audit aggregate totals do not match for {trading_date}")
     if record["errors"] != [] or record["mismatches"] != []:
         raise ExportError(f"audit diagnostics are not clean for {trading_date}")
@@ -149,6 +152,7 @@ def validate_candle_file(
 ) -> ValidatedDay:
     rows: list[list[Any]] = []
     total_volume = 0
+    total_notional = Decimal("0")
     total_trades = 0
     previous: datetime | None = None
 
@@ -188,8 +192,10 @@ def validate_candle_file(
             ):
                 raise ExportError(f"{location}: OHLC invariant violation")
             volume = parse_positive_int(row["volume"], "volume", location)
+            notional = parse_price(row["notional"], "notional", location)
             trades = parse_positive_int(row["trades"], "trades", location)
             total_volume += volume
+            total_notional += notional
             total_trades += trades
             rows.append([
                 timestamp.strftime("%Y-%m-%d %H:%M:%S"),
@@ -198,6 +204,7 @@ def validate_candle_file(
                 canonical_decimal(prices["low"]),
                 canonical_decimal(prices["close"]),
                 volume,
+                canonical_decimal(notional),
                 trades,
             ])
 
@@ -207,9 +214,11 @@ def validate_candle_file(
         raise ExportError(f"{candle_path.name}: candle count no longer matches audit")
     if total_volume != audit_record["source_quantity_sum"]:
         raise ExportError(f"{candle_path.name}: volume no longer matches audit")
+    if canonical_decimal(total_notional) != audit_record["source_notional_sum"]:
+        raise ExportError(f"{candle_path.name}: notional no longer matches audit")
     if total_trades != audit_record["source_trade_count"]:
         raise ExportError(f"{candle_path.name}: trade count no longer matches audit")
-    return ValidatedDay(trading_date, candle_path, rows, total_volume, total_trades)
+    return ValidatedDay(trading_date, candle_path, rows, total_volume, total_notional, total_trades)
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -260,7 +269,7 @@ def export_dataset(
             "contract": contract,
             "date": day.trading_date,
             "sourceTimeframeMinutes": 1,
-            "columns": ["datetime", "open", "high", "low", "close", "volume", "trades"],
+            "columns": ["datetime", "open", "high", "low", "close", "volume", "notional", "trades"],
             "candles": day.rows,
         }
         filename = f"{day.trading_date}.json"
@@ -270,6 +279,7 @@ def export_dataset(
             "file": f"{contract}/{filename}",
             "candles": len(day.rows),
             "volume": day.volume,
+            "notional": canonical_decimal(day.notional),
             "trades": day.trades,
         })
 

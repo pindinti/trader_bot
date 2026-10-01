@@ -1,14 +1,16 @@
 import { createMarketChart } from './chart.js';
+import { candleReference } from './candle-reference.js';
 import { validateManifest, wallClockToTimestamp } from './data.js';
-import { parseFibonacciLevels } from './drawings.js';
+import { DRAWING_COLOR_PALETTE, DRAWING_LINE_WIDTH, parseFibonacciLevels } from './drawings.js';
 import {
   DIRECTION_LABELS,
   PATTERN_LABELS,
-  STATUS_LABELS,
   buildAnalysisRestorePlan,
   canAccessAnalysisHistory,
   canCreateAnalysis,
   filterAnalysisHistory,
+  historyCardData,
+  deleteOwnedAnalysis,
   marketContextLabel,
 } from './history.js';
 import {
@@ -17,6 +19,8 @@ import {
   loadWarmupSessions,
 } from './indicator-context.js';
 import { calculateMovingAverages, largestMovingAveragePeriod } from './moving-averages.js';
+import { buildIndicatorLegend, INDICATOR_STYLES } from './indicators.js';
+import { calculateSessionVwap, hasExactVwap } from './vwap.js';
 import { createCandleReplay } from './replay.js';
 import {
   RESEARCH_SCHEMA_VERSION,
@@ -41,15 +45,15 @@ root.replaceChildren(mount);
 
 const elements = Object.fromEntries([
   'contractValue', 'chartContract', 'chartDate', 'chartTimeframe', 'dateSelect', 'timeframeControl',
-  'chartState', 'researchBand', 'datasetNote', 'valueOpen', 'valueHigh', 'valueLow', 'valueClose',
+  'chartState', 'datasetNote', 'candleReference', 'valueOpen', 'valueHigh', 'valueLow', 'valueClose',
   'valueVolume', 'valueTrades', 'drawingTools', 'fibConfig', 'fibLevels', 'selectedDrawing',
-  'deleteDrawing', 'selectionStatus', 'openResearch', 'analysisGrid', 'researchPanel', 'researchTitle',
+  'deleteDrawing', 'drawingColorPalette', 'decreaseLineWidth', 'increaseLineWidth', 'lineWidthValue', 'selectionStatus', 'openResearch', 'analysisGrid', 'researchPanel', 'researchTitle',
   'researchKind', 'researchWarningTitle', 'researchWarningText',
   'dirtyState', 'closeResearch', 'researchForm', 'movementSummary', 'analysisCutoff', 'factorList',
   'formErrors', 'saveResearch', 'newResearch', 'deleteResearch', 'saveState', 'savedRecords',
   'exportResearch', 'authButton', 'historyButton',
   'historyDialog', 'closeHistory', 'historyState', 'historyList',
-  'historySearch', 'movingAverageControl', 'movingAverageState',
+  'historySearch', 'movingAverageControl', 'movingAverageState', 'indicatorLegend',
   'replayToggle', 'replayPrevious', 'replayPlay', 'replayPause', 'replayNext',
   'replayTimestamp', 'replayPosition',
 ].map((id) => [id, mount.querySelector(`#${id}`)]));
@@ -60,7 +64,7 @@ const FACTORS = [
   ['higher_timeframe', 'Confirmação em tempo maior'], ['candlestick', 'Padrão de candle'],
   ['volume', 'Volume'], ['other', 'Outro'],
 ];
-const DRAWING_LABELS = { horizontal: 'Horizontal', trend: 'Tendência', fibonacci: 'Fibonacci', rectangle: 'Zona' };
+const DRAWING_LABELS = { horizontal: 'Horizontal', trend: 'Tendência', arrow: 'Seta', fibonacci: 'Fibonacci', rectangle: 'Zona' };
 const number = new Intl.NumberFormat('pt-BR');
 const price = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 4 });
 const dateLabel = new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC', weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
@@ -71,8 +75,9 @@ const state = {
   currentDate: null,
   baseCandles: [],
   candles: [],
+  chartCandles: [],
   priorSessions: [],
-  enabledMovingAverages: new Set(),
+  enabledIndicators: new Set(),
   timeframe: 1,
   selection: null,
   session,
@@ -92,6 +97,24 @@ let preserveTimeRangeOnce = false;
 let indicatorLoadGeneration = 0;
 let dayCache = null;
 
+elements.movingAverageControl.querySelectorAll('button[data-average], button[data-indicator]').forEach((button) => {
+  const key = button.dataset.average ?? button.dataset.indicator;
+  if (INDICATOR_STYLES[key]) button.style.setProperty('--indicator-color', INDICATOR_STYLES[key].color);
+});
+
+const drawingColorButtons = DRAWING_COLOR_PALETTE.map(({ value, label }) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.color = value;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', 'false');
+  button.style.setProperty('--drawing-color', value);
+  button.disabled = true;
+  return button;
+});
+elements.drawingColorPalette.replaceChildren(...drawingColorButtons);
+
 function showChartState(kind, title, detail) {
   elements.chartState.className = `chart-state ${kind}`;
   elements.chartState.innerHTML = kind === 'loading'
@@ -106,6 +129,7 @@ function renderInfo(candle = state.candles.at(-1)) {
     : ['—', '—', '—', '—', '—', '—'];
   [elements.valueOpen, elements.valueHigh, elements.valueLow, elements.valueClose, elements.valueVolume, elements.valueTrades]
     .forEach((element, index) => { element.textContent = values[index]; });
+  elements.candleReference.textContent = candleReference(state.chartCandles, candle, state.timeframe) ?? '—';
 }
 
 function markDirty() {
@@ -129,7 +153,7 @@ function setChartMode(mode) {
   elements.fibConfig.hidden = mode !== 'fibonacci';
 }
 
-const chart = createMarketChart(mount.querySelector('#chart'), elements.researchBand, {
+const chart = createMarketChart(mount.querySelector('#chart'), {
   onHover: renderInfo,
   onDrawingsChange: () => { markDirty(); renderFactorList(captureFactors()); renderSelection(); },
   onSelectionChange: (selection) => {
@@ -154,14 +178,17 @@ const chart = createMarketChart(mount.querySelector('#chart'), elements.research
   onSelectedChange: (drawing) => {
     elements.selectedDrawing.textContent = drawing ? `${DRAWING_LABELS[drawing.type]} · ${drawing.id.slice(0, 8)}` : 'Nenhum desenho selecionado';
     elements.deleteDrawing.disabled = !drawing;
+    elements.decreaseLineWidth.disabled = !drawing || drawing.lineWidth <= DRAWING_LINE_WIDTH.min;
+    elements.increaseLineWidth.disabled = !drawing || drawing.lineWidth >= DRAWING_LINE_WIDTH.max;
+    elements.lineWidthValue.textContent = drawing ? price.format(drawing.lineWidth) : price.format(DRAWING_LINE_WIDTH.default);
+    drawingColorButtons.forEach((button) => {
+      button.disabled = !drawing;
+      button.setAttribute('aria-pressed', String(drawing?.color === button.dataset.color));
+    });
   },
 });
 
 const replay = createCandleReplay({ onChange: handleReplayChange });
-
-function researchWindow(day) {
-  return { start: wallClockToTimestamp(`${day} 10:30:00`), end: wallClockToTimestamp(`${day} 15:00:00`) };
-}
 
 function timestampToInput(timestamp) {
   return new Date(timestamp * 1000).toISOString().slice(0, 19);
@@ -179,10 +206,6 @@ function formatTimestamp(timestamp) {
 function formatReplayTimestamp(timestamp) {
   if (!Number.isFinite(timestamp)) return '—';
   return new Date(timestamp * 1000).toISOString().slice(0, 16).replace('T', ' ');
-}
-
-function formatTradingDate(day) {
-  return String(day).split('-').reverse().join('/');
 }
 
 function renderReplayControls() {
@@ -253,16 +276,31 @@ function renderTimeframe({ preserveViewport = replay.getState().active ? 'logica
     simulatedTimestamp: marketView.simulatedTimestamp,
   });
   state.candles = chartContext.selectedCandles;
-  const movingAverages = calculateMovingAverages(chartContext.candles, state.enabledMovingAverages);
+  state.chartCandles = chartContext.candles;
+  const movingAverageKeys = new Set([...state.enabledIndicators].filter((key) => key !== 'vwap'));
+  const indicators = calculateMovingAverages(chartContext.candles, movingAverageKeys);
+  if (state.enabledIndicators.has('vwap') && hasExactVwap(chartContext.selectedCandles)) {
+    indicators.vwap = calculateSessionVwap(chartContext.selectedCandles);
+  }
   elements.chartTimeframe.textContent = `· ${state.timeframe} minuto${state.timeframe === 1 ? '' : 's'}`;
   elements.datasetNote.textContent = marketView.active
     ? `${marketView.candles.length} de ${state.baseCandles.length} candles de 1 minuto · buckets completos${chartContext.contextCandles.length ? ` · ${chartContext.contextCandles.length} de contexto` : ''}`
     : `${state.candles.length} candles do pregão${chartContext.contextCandles.length ? ` · ${chartContext.contextCandles.length} de contexto` : ''} · base auditada de 1 minuto`;
-  chart.setData(chartContext.candles, researchWindow(state.currentDate), {
+  chart.setData(chartContext.candles, {
     preserveViewport,
     sourceIntervalSeconds: state.timeframe * 60,
-    movingAverages,
+    indicators,
   });
+  const legend = buildIndicatorLegend(state.enabledIndicators, indicators);
+  elements.indicatorLegend.replaceChildren(...legend.map((item) => {
+    const element = document.createElement('span');
+    element.className = 'indicator-legend-item';
+    const swatch = document.createElement('i');
+    swatch.style.backgroundColor = item.color;
+    const value = item.value == null ? '—' : price.format(item.value);
+    element.append(swatch, document.createTextNode(`${item.label} · ${value}`));
+    return element;
+  }));
   renderInfo();
   renderSelection();
   if (state.candles.length) elements.chartState.hidden = true;
@@ -275,9 +313,11 @@ function renderTimeframe({ preserveViewport = replay.getState().active ? 'logica
 async function refreshIndicatorContext({ preserveViewport = 'time' } = {}) {
   const generation = ++indicatorLoadGeneration;
   state.priorSessions = [];
-  const requiredBars = largestMovingAveragePeriod(state.enabledMovingAverages);
+  const requiredBars = largestMovingAveragePeriod(new Set([...state.enabledIndicators].filter((key) => key !== 'vwap')));
   if (!requiredBars || !state.currentDate || !dayCache) {
-    elements.movingAverageState.textContent = requiredBars ? 'Contexto indisponível' : 'Nenhuma média ativa';
+    elements.movingAverageState.textContent = requiredBars
+      ? 'Contexto indisponível'
+      : (state.enabledIndicators.size ? 'Indicador da sessão atual' : 'Nenhum indicador ativo');
     if (state.currentDate && state.baseCandles.length) renderTimeframe({ preserveViewport });
     return;
   }
@@ -328,6 +368,7 @@ async function loadDay(day, { preserveResearch = false, replayContext = null } =
   indicatorLoadGeneration += 1;
   state.baseCandles = [];
   state.candles = [];
+  state.chartCandles = [];
   state.priorSessions = [];
   replay.load([]);
   showChartState('loading', 'Carregando o pregão', 'Lendo somente candles exportados e auditados…');
@@ -338,6 +379,11 @@ async function loadDay(day, { preserveResearch = false, replayContext = null } =
     if (!active) return;
     state.baseCandles = candles;
     state.currentDate = day;
+    const vwapButton = elements.movingAverageControl.querySelector('[data-indicator="vwap"]');
+    const exactVwapAvailable = hasExactVwap(candles);
+    vwapButton.disabled = !exactVwapAvailable;
+    vwapButton.title = exactVwapAvailable ? 'Exibir ou ocultar VWAP da sessão' : 'VWAP exata indisponível neste export legado';
+    if (!exactVwapAvailable) state.enabledIndicators.delete('vwap');
     replay.load(state.baseCandles);
     if (replayContext) replay.restore(replayContext);
     elements.chartDate.textContent = dateLabel.format(new Date(`${day}T00:00:00Z`));
@@ -347,6 +393,7 @@ async function loadDay(day, { preserveResearch = false, replayContext = null } =
   } catch (error) {
     state.baseCandles = [];
     state.candles = [];
+    state.chartCandles = [];
     state.priorSessions = [];
     replay.load([]);
     renderInfo(null);
@@ -408,9 +455,24 @@ function renderFactorList(factors = []) {
       option.selected = saved?.drawingIds?.includes(drawing.id) ?? false;
       links.append(option);
     });
+    const drawingReferences = document.createElement('div');
+    drawingReferences.className = 'drawing-references';
+    for (const drawingId of saved?.drawingIds ?? []) {
+      const drawingIndex = drawings.findIndex((drawing) => drawing.id === drawingId);
+      if (drawingIndex < 0) continue;
+      const reference = document.createElement('button');
+      reference.type = 'button';
+      reference.textContent = `${DRAWING_LABELS[drawings[drawingIndex].type]} ${drawingIndex + 1}`;
+      reference.addEventListener('click', () => chart.highlightDrawing(drawingId));
+      drawingReferences.append(reference);
+    }
     checkbox.addEventListener('change', () => { detail.hidden = !checkbox.checked; markDirty(); });
     [condition, role, links].forEach((input) => input.addEventListener('input', markDirty));
-    detail.append(condition, role, links);
+    links.addEventListener('change', () => {
+      const selectedId = links.selectedOptions[0]?.value;
+      if (selectedId) chart.highlightDrawing(selectedId);
+    });
+    detail.append(condition, role, links, drawingReferences);
     card.append(checkLabel, detail);
     return card;
   }));
@@ -418,10 +480,10 @@ function renderFactorList(factors = []) {
 
 function resetForm() {
   state.suppressDirty = true;
+  elements.researchForm.querySelectorAll('option[data-legacy="true"]').forEach((option) => option.remove());
   elements.researchForm.querySelectorAll('input, textarea, select').forEach((input) => { input.disabled = false; });
   elements.saveResearch.disabled = false;
   elements.researchForm.reset();
-  elements.researchForm.elements.researchStatus.value = 'observation';
   elements.analysisCutoff.value = state.selection ? timestampToInput(state.selection.endTimestamp) : '';
   renderFactorList([]);
   elements.formErrors.hidden = true;
@@ -473,6 +535,7 @@ function collectDraft(analysisContext) {
     ...analysisContext,
     pattern: form.pattern.value,
     patternDetail: form.patternDetail.value,
+    description: form.description.value,
     direction: form.direction.value,
     marketContext: form.marketContext.value,
     contextExplanation: form.contextExplanation.value,
@@ -481,8 +544,11 @@ function collectDraft(analysisContext) {
     assessmentExplanation: form.assessmentExplanation.value,
     missingConfirmation: form.missingConfirmation.value,
     invalidationConditions: form.invalidationConditions.value,
-    candidateRule: form.candidateRule.value,
-    researchStatus: form.researchStatus.value,
+    trigger: form.trigger.value,
+    entryOrder: form.entryOrder.value,
+    stop: form.stop.value,
+    target: form.target.value,
+    researchStatus: state.records.find((record) => record.id === state.currentRecordId)?.researchStatus ?? 'observation',
     drawings: chart.getDrawings(),
   };
 }
@@ -498,15 +564,25 @@ function populateForm(record) {
   form.analysisCutoff.value = timestampToInput(record.analysisCutoffTimestamp);
   form.pattern.value = record.pattern;
   form.patternDetail.value = record.patternDetail;
+  form.description.value = record.description ?? '';
   form.direction.value = record.direction;
   form.marketContext.value = record.marketContext;
   form.contextExplanation.value = record.contextExplanation;
+  if (![...form.assessment.options].some((option) => option.value === record.assessment)) {
+    const legacyOption = document.createElement('option');
+    legacyOption.value = record.assessment;
+    legacyOption.textContent = record.assessment === 'wait' ? 'Aguardar confirmação (legado)' : 'Indeterminado (legado)';
+    legacyOption.dataset.legacy = 'true';
+    form.assessment.append(legacyOption);
+  }
   form.assessment.value = record.assessment;
   form.assessmentExplanation.value = record.assessmentExplanation;
   form.missingConfirmation.value = record.missingConfirmation;
   form.invalidationConditions.value = record.invalidationConditions;
-  form.candidateRule.value = record.candidateRule;
-  form.researchStatus.value = record.researchStatus;
+  form.trigger.value = record.trigger ?? '';
+  form.entryOrder.value = record.entryOrder ?? '';
+  form.stop.value = record.stop ?? '';
+  form.target.value = record.target ?? '';
   renderFactorList(record.factors);
   renderAnalysisType(record.analysisType);
   elements.researchTitle.textContent = PATTERN_LABELS[record.pattern] ?? 'Análise';
@@ -606,7 +682,7 @@ function renderSavedRecords() {
     const analysisLabel = record.analysisType === 'replay'
       ? `REPLAY · ${formatTimestamp(record.replayTimestamp)}`
       : 'ANÁLISE RETROSPECTIVA';
-    summary.textContent = `${analysisLabel} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)} · ${record.timeframeMinutes}m · ${marketContextLabel(record)} · ${STATUS_LABELS[record.researchStatus] ?? record.researchStatus}`;
+    summary.textContent = `${analysisLabel} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)} · ${record.timeframeMinutes}m · ${marketContextLabel(record)}`;
     card.append(header, summary);
     card.addEventListener('click', () => openRecord(record));
     return card;
@@ -656,40 +732,78 @@ function renderAnalysisHistory() {
   }
   elements.historyState.hidden = true;
   const entries = visibleRecords.map((record) => {
-    const entry = document.createElement('button');
-    entry.type = 'button';
+    const entry = document.createElement('article');
     entry.className = 'history-entry';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'history-open';
+    const card = historyCardData(record);
     const identity = document.createElement('div');
     identity.className = 'history-identity';
     const title = document.createElement('strong');
-    title.textContent = record.analysisType === 'replay'
-      ? `REPLAY · ${formatTradingDate(record.tradingDate)} · ${formatTimestamp(record.replayTimestamp)} · ${record.timeframeMinutes}m`
-      : `ANÁLISE RETROSPECTIVA · ${formatTradingDate(record.tradingDate)} · ${record.timeframeMinutes}m`;
-    const timeframe = document.createElement('small');
-    timeframe.textContent = `${record.contract} · ${formatTimestamp(record.startTimestamp)}–${formatTimestamp(record.endTimestamp)}`;
-    identity.append(title, timeframe);
-    const metadata = document.createElement('div');
-    metadata.className = 'history-metadata';
-    const pattern = document.createElement('strong');
-    pattern.textContent = PATTERN_LABELS[record.pattern] ?? record.pattern;
-    const details = document.createElement('span');
-    details.textContent = `${DIRECTION_LABELS[record.direction] ?? record.direction} · ${STATUS_LABELS[record.researchStatus] ?? record.researchStatus}`;
-    metadata.append(pattern, details);
+    title.textContent = card.setup;
+    const direction = document.createElement('small');
+    direction.textContent = DIRECTION_LABELS[record.direction] ?? record.direction;
+    identity.append(title, direction);
     const context = document.createElement('div');
     context.className = 'history-context';
     const contextHeading = document.createElement('strong');
-    contextHeading.textContent = 'Contexto de mercado';
+    contextHeading.textContent = card.context;
     const contextValue = document.createElement('span');
     contextValue.className = 'history-context-value';
-    const contextExplanation = String(record.contextExplanation ?? '').trim();
-    const contextName = record.marketContext ? marketContextLabel(record) : 'Não informado';
-    contextValue.textContent = contextExplanation ? `${contextName} · ${contextExplanation}` : contextName;
+    contextValue.textContent = card.contextExplanation || 'Sem explicação adicional';
     context.append(contextHeading, contextValue);
+    const market = document.createElement('div');
+    market.className = 'history-market';
+    const contractInterval = document.createElement('strong');
+    contractInterval.textContent = card.contractInterval;
+    const dateTimeframe = document.createElement('span');
+    dateTimeframe.textContent = card.dateTimeframe;
+    market.append(contractInterval, dateTimeframe);
+    open.append(identity, context, market);
+    open.addEventListener('click', () => openRecord(record));
+    const actions = document.createElement('div');
+    actions.className = 'history-entry-actions';
     const author = document.createElement('span');
     author.className = 'history-author';
     author.textContent = record.authorId === state.session?.user.id ? 'Você' : (record.author?.display_name || record.author?.email || 'Outro pesquisador');
-    entry.append(identity, metadata, context, author);
-    entry.addEventListener('click', () => openRecord(record));
+    actions.append(author);
+    if (record.authorId === state.session?.user.id) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'history-delete danger-quiet';
+      remove.setAttribute('aria-label', `Excluir análise ${card.setup}`);
+      remove.title = 'Excluir análise';
+      remove.textContent = 'Excluir';
+      remove.addEventListener('click', async () => {
+        remove.disabled = true;
+        try {
+          const deleted = await deleteOwnedAnalysis({
+            record,
+            userId: state.session?.user.id,
+            confirmDelete: () => window.confirm('Excluir definitivamente esta análise e seus desenhos?'),
+            deleteRecord: deleteResearchRecord,
+          });
+          if (!deleted || !active) return;
+          state.historyRecords = state.historyRecords.filter((item) => item.id !== record.id);
+          state.records = state.records.filter((item) => item.id !== record.id);
+          if (state.currentRecordId === record.id) {
+            clearActiveResearch();
+            elements.researchPanel.hidden = true;
+            elements.analysisGrid.classList.remove('panel-open');
+            renderReplayControls();
+          }
+          renderAnalysisHistory();
+          renderSavedRecords();
+        } catch (error) {
+          elements.historyState.hidden = false;
+          elements.historyState.className = 'history-state error';
+          elements.historyState.textContent = `Não foi possível excluir a análise: ${error.message}`;
+        } finally { remove.disabled = false; }
+      });
+      actions.append(remove);
+    }
+    entry.append(open, actions);
     return entry;
   });
   elements.historyList.replaceChildren(...entries);
@@ -749,6 +863,13 @@ elements.deleteDrawing.addEventListener('click', () => {
   if (activeRecord && activeRecord.authorId !== state.session?.user.id) return;
   chart.deleteSelectedDrawing();
 });
+elements.decreaseLineWidth.addEventListener('click', () => chart.adjustSelectedDrawingLineWidth(-DRAWING_LINE_WIDTH.step));
+elements.increaseLineWidth.addEventListener('click', () => chart.adjustSelectedDrawingLineWidth(DRAWING_LINE_WIDTH.step));
+elements.drawingColorPalette.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-color]');
+  if (!button || button.disabled) return;
+  chart.setSelectedDrawingColor(button.dataset.color);
+});
 elements.openResearch.addEventListener('click', () => {
   if (!canCreateAnalysis(state.selection, chart.getDrawings())) return;
   resetForm();
@@ -786,12 +907,14 @@ elements.timeframeControl.addEventListener('click', (event) => {
   markDirty();
 });
 elements.movingAverageControl.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-average]');
+  const button = event.target.closest('button[data-average], button[data-indicator]');
   if (!button || !state.baseCandles.length) return;
-  const key = button.dataset.average;
-  if (state.enabledMovingAverages.has(key)) state.enabledMovingAverages.delete(key);
-  else state.enabledMovingAverages.add(key);
-  button.setAttribute('aria-pressed', String(state.enabledMovingAverages.has(key)));
+  const key = button.dataset.average ?? button.dataset.indicator;
+  if (!INDICATOR_STYLES[key]) return;
+  if (state.enabledIndicators.has(key)) state.enabledIndicators.delete(key);
+  else state.enabledIndicators.add(key);
+  button.setAttribute('aria-pressed', String(state.enabledIndicators.has(key)));
+  button.style.setProperty('--indicator-color', INDICATOR_STYLES[key].color);
   void refreshIndicatorContext({ preserveViewport: 'time' });
 });
 elements.replayToggle.addEventListener('click', () => {
@@ -892,8 +1015,9 @@ function destroy() {
   state.member = null;
   state.baseCandles = [];
   state.candles = [];
+  state.chartCandles = [];
   state.priorSessions = [];
-  state.enabledMovingAverages.clear();
+  state.enabledIndicators.clear();
   state.records = [];
   state.historyRecords = [];
   state.selection = null;

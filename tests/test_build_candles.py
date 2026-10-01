@@ -104,6 +104,7 @@ class CandleBuilderTests(unittest.TestCase):
                 "low": "5142.5",
                 "close": "5142.5",
                 "volume": "9",
+                "notional": "46289",
                 "trades": "3",
             },
         )
@@ -206,7 +207,7 @@ class CandleBuilderTests(unittest.TestCase):
         )
         summary = self.assert_cancelled_candle(
             [cancelled, remaining, delete_of(cancelled, HoraFechamento="091500000")],
-            {"datetime": "2026-09-21 09:00:00", "open": "11", "high": "11", "low": "11", "close": "11", "volume": "3", "trades": "1"},
+            {"datetime": "2026-09-21 09:00:00", "open": "11", "high": "11", "low": "11", "close": "11", "volume": "3", "notional": "33", "trades": "1"},
         )
         self.assertEqual(summary.selected_rows, 3)
         self.assertEqual(summary.new_trade_count, 2)

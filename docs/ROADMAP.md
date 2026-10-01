@@ -14,7 +14,7 @@ This roadmap favors small increments that can be inspected against historical ch
 
 **Objective:** Let authorized researchers inspect audited candles, draw, select movements, and preserve structured analyses without presenting them as signals.
 
-**Evidence and acceptance:** The Explorer supports seven chart timeframes (1, 2, 5, 10, 15, 30, and 60 minutes), OHLCV inspection, optional SMA/EMA overlays for 9/21/200 completed active-timeframe closes, schema-version-1 drawings, retrospective analyses, searchable shared history with market context, JSON research export, and author-restricted changes. Prior-session indicator warmup is visible on the chart but remains outside `getMarketView()`. Focused frontend tests cover aggregation, indicators, drawings, research mapping, search, and history restoration.
+**Evidence and acceptance:** The Explorer supports seven chart timeframes (1, 2, 5, 10, 15, 30, and 60 minutes), numbered OHLCV inspection, optional SMA/EMA overlays for 9/21/200 completed active-timeframe closes, exact session VWAP from cancellation-resolved trade notional, schema-version-1 drawings, retrospective analyses, searchable shared history with market context, JSON research export, and author-restricted changes. Prior-session indicator warmup is visible on the chart but remains outside `getMarketView()`. Focused frontend tests cover aggregation, indicators, drawings, research mapping, search, and history restoration.
 
 ### Private access and data delivery — completed
 
@@ -50,7 +50,7 @@ Confirmation is based only on the completed candidate candle. OHLC data cannot e
 
 **Objective:** Run definition v0.1 over explicitly selected local exported days and produce deterministic material for trader review without exposing historical data or adding Explorer UI.
 
-[`inspect-false-breakouts.mjs`](../explorer/scripts/inspect-false-breakouts.mjs) validates the local schema-version-1 manifest and daily files, invokes the existing observer independently for each day, and writes a CSV, summary, and deterministic shortlist only under the ignored `data/research/` boundary. The shortlist prioritizes the earliest dual-direction candle, then the earliest additional example of each direction, then the earliest remaining candidates; it is not a quality or profitability ranking.
+[`inspect-false-breakouts.mjs`](../explorer/scripts/inspect-false-breakouts.mjs) validates local schema-version-1 or schema-version-2 manifest and daily files, invokes the existing observer independently for each day, and writes a CSV, summary, and deterministic shortlist only under the ignored `data/research/` boundary. The shortlist prioritizes the earliest dual-direction candle, then the earliest additional example of each direction, then the earliest remaining candidates; it is not a quality or profitability ranking.
 
 Run from the repository root with explicit local inputs:
 

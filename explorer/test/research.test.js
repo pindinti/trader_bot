@@ -21,16 +21,19 @@ const validDraft = () => ({
   analysisCutoffTimestamp: 1300,
   pattern: 'pullback',
   patternDetail: '',
+  description: 'Pullback into the rising average.',
   direction: 'long',
   marketContext: 'uptrend',
   contextExplanation: 'Higher highs before the selected interval.',
   factors: [{ type: 'vwap', condition: 'Price reclaimed VWAP.', role: 'supporting', drawingIds: [] }],
-  assessment: 'wait',
+  assessment: 'trade_not_taken',
   assessmentExplanation: 'Wait for a close above the local high.',
   missingConfirmation: 'Strong close.',
   invalidationConditions: 'Loss of the zone.',
-  candidateRule: '',
-  researchStatus: 'observation',
+  trigger: 'Close above the local high.',
+  entryOrder: 'Buy stop above the trigger candle.',
+  stop: 'Below the pullback low.',
+  target: 'Previous session high.',
   drawings: [{ schemaVersion: 1, id: 'h1', type: 'horizontal', anchors: [{ time: 1100, price: 5140.5 }] }],
 });
 
@@ -50,10 +53,13 @@ test('parses minute-precision research input without weakening exported candle p
   assert.throws(() => wallClockToTimestamp(input), /Invalid exported datetime/);
 });
 
-test('requires candidate text for non-observation statuses', () => {
+test('new writes default internal research status and omit candidate rule', () => {
   const draft = validDraft();
-  draft.researchStatus = 'candidate';
-  assert.match(validateResearchDraft(draft).join(' '), /Candidate bot rule/);
+  draft.candidateRule = 'legacy value that must not be rewritten';
+  assert.deepEqual(validateResearchDraft(draft), []);
+  const database = toDatabaseRecord(draft);
+  assert.equal(database.research_status, 'observation');
+  assert.equal(Object.hasOwn(database, 'candidate_rule'), false);
 });
 
 test('requires at least one drawing for a new analysis', () => {
@@ -71,6 +77,30 @@ test('maps records to and from database shape', () => {
   assert.equal(database.analysis_type, 'retrospective');
   assert.equal(restored.analysisType, 'retrospective');
   assert.equal(restored.replayTimestamp, null);
+  assert.equal(database.description, 'Pullback into the rising average.');
+  assert.equal(database.entry_order, 'Buy stop above the trigger candle.');
+  assert.equal(restored.trigger, 'Close above the local high.');
+  assert.equal(restored.stop, 'Below the pullback low.');
+});
+
+test('accepts revised assessments and safely restores legacy values', () => {
+  for (const assessment of ['trade_taken', 'trade_not_taken', 'consider', 'discard']) {
+    const draft = validDraft();
+    draft.assessment = assessment;
+    assert.deepEqual(validateResearchDraft(draft), []);
+  }
+  for (const assessment of ['wait', 'undetermined']) {
+    const record = toDatabaseRecord({ ...validDraft(), assessment });
+    assert.equal(fromDatabaseRecord(record).assessment, assessment);
+  }
+});
+
+test('historical research statuses remain readable and can be preserved on updates', () => {
+  for (const researchStatus of ['candidate', 'clarification', 'review']) {
+    const database = toDatabaseRecord({ ...validDraft(), researchStatus }, { preserveHistoricalStatus: true });
+    assert.equal(database.research_status, researchStatus);
+    assert.equal(fromDatabaseRecord(database).researchStatus, researchStatus);
+  }
 });
 
 test('validates and maps an explicit replay analysis snapshot', () => {

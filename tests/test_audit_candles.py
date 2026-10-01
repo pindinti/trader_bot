@@ -13,7 +13,7 @@ SOURCE_FIELDS = [
     "TipoSessaoPregao", "DataNegocio", "CodigoParticipanteComprador",
     "CodigoParticipanteVendedor", "TipoDoCanal",
 ]
-CANDLE_FIELDS = ["datetime", "contract", "open", "high", "low", "close", "volume", "trades"]
+CANDLE_FIELDS = ["datetime", "contract", "open", "high", "low", "close", "volume", "notional", "trades"]
 
 
 def trade(**changes):
@@ -44,7 +44,7 @@ def candle(**changes):
     row = {
         "datetime": "2026-09-21 09:00:00", "contract": "WDOV26",
         "open": "10", "high": "12", "low": "9", "close": "9",
-        "volume": "9", "trades": "3",
+        "volume": "9", "notional": "92", "trades": "3",
     }
     row.update(changes)
     return row
@@ -108,6 +108,14 @@ class AuditTests(unittest.TestCase):
         self.assertFalse(result["source_quantity_matches"])
         self.assertFalse(result["source_trade_count_matches"])
 
+    def test_trade_notional_mismatch_fails_independent_audit(self):
+        self.write_source()
+        self.write_candles([candle(notional="91")])
+        result = self.audit()
+        self.assertEqual(result["status"], "FAIL")
+        self.assertFalse(result["source_notional_matches"])
+        self.assertTrue(any(item.get("field") == "notional" for item in result["mismatches"]))
+
     def test_missing_candle(self):
         self.write_source()
         self.write_candles([candle(datetime="2026-09-21 09:01:00", open="1", high="1", low="1", close="1", volume="1", trades="1")])
@@ -133,8 +141,8 @@ class AuditTests(unittest.TestCase):
             trade(CodigoIdentificadorNegocio="2", HoraFechamento="090110000", PrecoNegocio="11,0"),
         ])
         self.write_candles([
-            candle(datetime="2026-09-21 09:01:00", open="11", high="11", low="11", close="11", volume="2", trades="1"),
-            candle(open="10", high="10", low="10", close="10", volume="2", trades="1"),
+            candle(datetime="2026-09-21 09:01:00", open="11", high="11", low="11", close="11", volume="2", notional="22", trades="1"),
+            candle(open="10", high="10", low="10", close="10", volume="2", notional="20", trades="1"),
         ])
         result = self.audit()
         self.assertEqual(result["out_of_order_candle_count"], 1)
@@ -146,7 +154,7 @@ class AuditTests(unittest.TestCase):
             trade(CodigoIdentificadorNegocio="2", HoraFechamento="090010000", PrecoNegocio="10,0"),
             trade(CodigoIdentificadorNegocio="3", HoraFechamento="090050000", PrecoNegocio="12,0"),
         ])
-        self.write_candles([candle(open="10", high="12", low="10", close="12", volume="6", trades="3")])
+        self.write_candles([candle(open="10", high="12", low="10", close="12", volume="6", notional="66", trades="3")])
         result = self.audit()
         self.assertEqual(result["source_out_of_order_count"], 1)
         self.assertEqual(result["status"], "PASS")
@@ -176,6 +184,12 @@ class AuditTests(unittest.TestCase):
 
     def assert_cancellation_passes(self, rows, expected_candle, active_count):
         self.write_source(rows)
+        cancelled_ids = {row["CodigoIdentificadorNegocio"] for row in rows if row["AcaoAtualizacao"] == "2"}
+        active_rows = [row for row in rows if row["AcaoAtualizacao"] == "0" and row["CodigoIdentificadorNegocio"] not in cancelled_ids]
+        expected_candle["notional"] = str(sum(
+            Decimal(row["PrecoNegocio"].replace(",", ".")) * int(row["QuantidadeNegociada"])
+            for row in active_rows
+        ))
         self.write_candles([expected_candle])
         result = self.audit()
         self.assertEqual(result["status"], "PASS", result["errors"] + result["mismatches"])
@@ -194,6 +208,8 @@ class AuditTests(unittest.TestCase):
         )
         self.assertEqual(result["source_selected_row_count"], 3)
         self.assertEqual(result["source_quantity_sum"], 3)
+        self.assertEqual(result["source_notional_sum"], "33")
+        self.assertTrue(result["source_notional_matches"])
 
     def test_deleted_high_is_recomputed(self):
         opening = trade(CodigoIdentificadorNegocio="1", PrecoNegocio="10,0", QuantidadeNegociada="2", HoraFechamento="090010000")
@@ -251,7 +267,7 @@ class AuditTests(unittest.TestCase):
         retained = trade(CodigoIdentificadorNegocio="2", PrecoNegocio="11,0", QuantidadeNegociada="3", HoraFechamento="090100000")
         self.write_source([removed, retained, delete_of(removed)])
         self.write_candles([
-            candle(datetime="2026-09-21 09:01:00", open="11", high="11", low="11", close="11", volume="3", trades="1")
+            candle(datetime="2026-09-21 09:01:00", open="11", high="11", low="11", close="11", volume="3", notional="33", trades="1")
         ])
         result = self.audit()
         self.assertEqual(result["status"], "PASS")
@@ -285,7 +301,7 @@ class AuditTests(unittest.TestCase):
     def test_same_identifier_for_other_instrument_does_not_match(self):
         original = trade()
         self.write_source([original, delete_of(original, CodigoInstrumento="WDOX26")])
-        self.write_candles([candle(open="10", high="10", low="10", close="10", volume="2", trades="1")])
+        self.write_candles([candle(open="10", high="10", low="10", close="10", volume="2", notional="20", trades="1")])
         result = self.audit()
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["source_cancelled_trade_count"], 0)

@@ -88,7 +88,7 @@ export async function listResearchHistory(contract) {
 }
 
 export async function saveResearchRecord(draft, id = null) {
-  const payload = toDatabaseRecord(draft);
+  const payload = toDatabaseRecord(draft, { preserveHistoricalStatus: Boolean(id) });
   const query = id
     ? getSupabase().from('research_annotations').update(payload).eq('id', id)
     : getSupabase().from('research_annotations').insert(payload);
@@ -98,6 +98,6 @@ export async function saveResearchRecord(draft, id = null) {
 }
 
 export async function deleteResearchRecord(id) {
-  const { error } = await getSupabase().from('research_annotations').delete().eq('id', id);
+  const { error } = await getSupabase().from('research_annotations').delete().eq('id', id).select('id').single();
   if (error) throw error;
 }

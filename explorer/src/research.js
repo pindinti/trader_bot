@@ -6,7 +6,8 @@ export const PATTERNS = Object.freeze(['false_breakout', 'pullback', 'inside_bar
 export const DIRECTIONS = Object.freeze(['long', 'short', 'undetermined']);
 export const MARKET_CONTEXTS = Object.freeze(['uptrend', 'downtrend', 'sideways', 'transition']);
 export const FACTOR_ROLES = Object.freeze(['required', 'supporting', 'disqualifying', 'undetermined']);
-export const ASSESSMENTS = Object.freeze(['consider', 'discard', 'wait', 'undetermined']);
+export const ASSESSMENTS = Object.freeze(['trade_taken', 'trade_not_taken', 'consider', 'discard']);
+export const LEGACY_ASSESSMENTS = Object.freeze(['wait', 'undetermined']);
 export const RESEARCH_STATUSES = Object.freeze(['observation', 'candidate', 'clarification', 'review']);
 export const ANALYSIS_TYPES = Object.freeze(['retrospective', 'replay']);
 export const FACTOR_TYPES = Object.freeze(['vwap', 'ma21', 'ma200', 'fibonacci', 'support_resistance', 'higher_timeframe', 'candlestick', 'volume', 'other']);
@@ -92,10 +93,9 @@ export function validateResearchDraft(draft) {
       if (!Array.isArray(factor?.drawingIds)) errors.push(`Factor ${index + 1} drawing links must be an array`);
     });
   }
-  if (!ASSESSMENTS.includes(draft?.assessment)) errors.push('Trader assessment is required');
+  if (![...ASSESSMENTS, ...LEGACY_ASSESSMENTS].includes(draft?.assessment)) errors.push('Trader assessment is required');
   requiredText(draft?.assessmentExplanation, 'Assessment explanation', errors);
-  if (!RESEARCH_STATUSES.includes(draft?.researchStatus)) errors.push('Research status is required');
-  if (draft?.researchStatus !== 'observation') requiredText(draft?.candidateRule, 'Candidate bot rule', errors);
+  if (draft?.researchStatus != null && !RESEARCH_STATUSES.includes(draft.researchStatus)) errors.push('Research status is invalid');
   if (!Array.isArray(draft?.drawings) || draft.drawings.length === 0) errors.push('At least one drawing is required');
   else try { serializeDrawings(draft.drawings); } catch (error) { errors.push(error.message); }
   return errors;
@@ -115,6 +115,7 @@ export function normalizeResearchDraft(draft) {
     replayPosition: draft.replayPosition == null ? null : Number(draft.replayPosition),
     pattern: draft.pattern,
     patternDetail: String(draft.patternDetail ?? '').trim(),
+    description: String(draft.description ?? '').trim(),
     direction: draft.direction,
     marketContext: draft.marketContext,
     contextExplanation: String(draft.contextExplanation ?? '').trim(),
@@ -128,8 +129,11 @@ export function normalizeResearchDraft(draft) {
     assessmentExplanation: String(draft.assessmentExplanation ?? '').trim(),
     missingConfirmation: String(draft.missingConfirmation ?? '').trim(),
     invalidationConditions: String(draft.invalidationConditions ?? '').trim(),
-    candidateRule: String(draft.candidateRule ?? '').trim(),
-    researchStatus: draft.researchStatus,
+    trigger: String(draft.trigger ?? '').trim(),
+    entryOrder: String(draft.entryOrder ?? '').trim(),
+    stop: String(draft.stop ?? '').trim(),
+    target: String(draft.target ?? '').trim(),
+    researchStatus: draft.researchStatus ?? 'observation',
     drawings: serializeDrawings(draft.drawings ?? []),
   };
   const errors = validateResearchDraft(normalized);
@@ -137,7 +141,7 @@ export function normalizeResearchDraft(draft) {
   return normalized;
 }
 
-export function toDatabaseRecord(draft) {
+export function toDatabaseRecord(draft, { preserveHistoricalStatus = false } = {}) {
   const item = normalizeResearchDraft(draft);
   return {
     schema_version: item.schemaVersion,
@@ -152,6 +156,7 @@ export function toDatabaseRecord(draft) {
     replay_position: item.replayPosition,
     pattern: item.pattern,
     pattern_detail: item.patternDetail,
+    description: item.description,
     direction: item.direction,
     market_context: item.marketContext,
     context_explanation: item.contextExplanation,
@@ -160,8 +165,11 @@ export function toDatabaseRecord(draft) {
     assessment_explanation: item.assessmentExplanation,
     missing_confirmation: item.missingConfirmation,
     invalidation_conditions: item.invalidationConditions,
-    candidate_rule: item.candidateRule,
-    research_status: item.researchStatus,
+    trigger: item.trigger,
+    entry_order: item.entryOrder,
+    stop: item.stop,
+    target: item.target,
+    research_status: preserveHistoricalStatus ? item.researchStatus : 'observation',
     drawings: item.drawings,
   };
 }
@@ -185,6 +193,7 @@ export function fromDatabaseRecord(record) {
     replayPosition: record.replay_position == null ? null : Number(record.replay_position),
     pattern: record.pattern,
     patternDetail: record.pattern_detail ?? '',
+    description: record.description ?? '',
     direction: record.direction,
     marketContext: record.market_context,
     contextExplanation: record.context_explanation ?? '',
@@ -193,6 +202,11 @@ export function fromDatabaseRecord(record) {
     assessmentExplanation: record.assessment_explanation,
     missingConfirmation: record.missing_confirmation ?? '',
     invalidationConditions: record.invalidation_conditions ?? '',
+    trigger: record.trigger ?? '',
+    entryOrder: record.entry_order ?? '',
+    stop: record.stop ?? '',
+    target: record.target ?? '',
+    // Legacy-only field retained on reads/exports; current writes intentionally omit it.
     candidateRule: record.candidate_rule ?? '',
     researchStatus: record.research_status,
     drawings: serializeDrawings(record.drawings ?? []),

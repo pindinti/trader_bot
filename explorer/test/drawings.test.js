@@ -3,10 +3,15 @@ import test from 'node:test';
 
 import {
   DEFAULT_FIBONACCI_LEVELS,
+  DEFAULT_DRAWING_COLOR,
+  DRAWING_COLOR_PALETTE,
+  DRAWING_LINE_WIDTH,
   DRAWING_TYPES,
   createDrawing,
   distanceToSegment,
   drawingGeometry,
+  drawingRenderStyle,
+  drawingWithColor,
   fibonacciPrices,
   hitTestDrawings,
   parseFibonacciLevels,
@@ -16,12 +21,92 @@ import {
 } from '../src/drawings.js';
 import { SUPPORTED_TIMEFRAMES } from '../src/aggregate.js';
 import { reprojectLogicalRange } from '../src/chart.js';
+import {
+  drawingHandlesVisible,
+  movementSelectionRectangle,
+  paintMovementSelection,
+} from '../src/drawing-overlay.js';
 
 test('creates and serializes timestamp/price drawings without pixel geometry', () => {
   const drawing = createDrawing('trend', [{ time: 1000, price: 10.5 }, { time: 2000, price: 12 }], { id: 'trend-1' });
   const serialized = serializeDrawings([drawing]);
   assert.deepEqual(serialized, [drawing]);
   assert.equal(JSON.stringify(serialized).includes('"x"'), false);
+});
+
+test('arrow and line width persist while legacy drawings receive a quiet default', () => {
+  const arrow = createDrawing('arrow', [{ time: 1000, price: 10 }, { time: 1060, price: 12 }], { id: 'arrow-1', lineWidth: 2.5 });
+  assert.equal(serializeDrawings([arrow])[0].lineWidth, 2.5);
+  assert.equal(drawingGeometry(arrow, { timeToX: (value) => value, priceToY: (value) => value }, 100).segments.length, 1);
+  const legacy = serializeDrawings([{ schemaVersion: 1, id: 'old', type: 'horizontal', anchors: [{ time: 1000, price: 10 }] }])[0];
+  assert.equal(legacy.lineWidth, DRAWING_LINE_WIDTH.default);
+  assert.equal(legacy.color, DEFAULT_DRAWING_COLOR);
+  assert.equal(createDrawing('horizontal', [{ time: 1000, price: 10 }], { lineWidth: 99 }).lineWidth, DRAWING_LINE_WIDTH.max);
+  assert.equal(createDrawing('horizontal', [{ time: 1000, price: 10 }], { lineWidth: 0.1 }).lineWidth, DRAWING_LINE_WIDTH.min);
+  assert.equal(DRAWING_LINE_WIDTH.min, 0.5);
+  assert.equal(DRAWING_LINE_WIDTH.max, 4);
+  assert.equal(DRAWING_LINE_WIDTH.step, 0.25);
+  for (const lineWidth of [0.5, 0.75]) {
+    const thin = createDrawing('trend', [{ time: 1000, price: 10 }, { time: 1060, price: 12 }], { lineWidth });
+    assert.equal(serializeDrawings([thin])[0].lineWidth, lineWidth);
+  }
+});
+
+test('configured drawing colors serialize and recolor without changing identity or geometry', () => {
+  const original = createDrawing('trend', [{ time: 1000, price: 10 }, { time: 1060, price: 12 }], {
+    id: 'colored-line',
+    lineWidth: 0.75,
+    color: DRAWING_COLOR_PALETTE[3].value,
+  });
+  assert.equal(serializeDrawings([original])[0].color, '#70d9d2');
+  const recolored = drawingWithColor(original, DRAWING_COLOR_PALETTE[4].value);
+  assert.equal(recolored.id, original.id);
+  assert.equal(recolored.lineWidth, original.lineWidth);
+  assert.deepEqual(recolored.anchors, original.anchors);
+  assert.equal(recolored.color, '#5fa9ef');
+  assert.equal(original.color, '#70d9d2');
+});
+
+test('drawing handles are exposed only by explicit edit mode', () => {
+  assert.equal(drawingHandlesVisible('edit'), true);
+  for (const mode of ['navigate', 'selection', 'horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle']) {
+    assert.equal(drawingHandlesVisible(mode), false, mode);
+  }
+});
+
+test('movement selection paints a translucent region without a border operation', () => {
+  const coordinates = new Map([[1000, 10], [1060, 20], [1120, 30]]);
+  const rectangle = movementSelectionRectangle(
+    { startTimestamp: 1000, endTimestamp: 1120 },
+    (time) => coordinates.get(time) ?? null,
+    60,
+    100,
+    200,
+  );
+  assert.deepEqual(rectangle, { x: 5, y: 0, width: 30, height: 200 });
+  const operations = [];
+  const context = {
+    fillStyle: '',
+    fillRect: (...args) => operations.push(['fillRect', ...args]),
+    stroke: () => operations.push(['stroke']),
+    strokeRect: (...args) => operations.push(['strokeRect', ...args]),
+  };
+  paintMovementSelection(context, rectangle);
+  assert.match(context.fillStyle, /^rgba\(.+, 0\.08\)$/);
+  assert.deepEqual(operations, [['fillRect', 5, 0, 30, 200]]);
+});
+
+test('temporary drawing highlight does not mutate persisted style or identity', () => {
+  const drawing = createDrawing('trend', [{ time: 1000, price: 10 }, { time: 1060, price: 12 }], {
+    id: 'stable', lineWidth: 2, color: '#dd6673',
+  });
+  const before = structuredClone(drawing);
+  assert.deepEqual(drawingRenderStyle(drawing, { highlighted: true }), {
+    color: '#dd6673', lineWidth: 2.5, emphasis: 'highlighted',
+  });
+  assert.deepEqual(drawing, before);
+  assert.equal(serializeDrawings([drawing])[0].id, 'stable');
+  assert.equal(serializeDrawings([drawing])[0].color, '#dd6673');
 });
 
 test('projects preserved timestamps between higher-timeframe candles without snapping', () => {

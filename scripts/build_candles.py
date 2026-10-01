@@ -1,4 +1,4 @@
-"""Build one-minute OHLCV candles from filtered B3 WDO trade files."""
+"""Build one-minute OHLCV candles with trade notional from filtered B3 WDO trades."""
 
 from __future__ import annotations
 
@@ -56,6 +56,7 @@ class Candle:
     low: Decimal
     close: Decimal
     volume: int
+    notional: Decimal
     trades: int
     first_key: tuple[datetime, int]
     last_key: tuple[datetime, int]
@@ -71,6 +72,7 @@ class Candle:
         self.high = max(self.high, price)
         self.low = min(self.low, price)
         self.volume += quantity
+        self.notional += price * quantity
         self.trades += 1
 
 
@@ -279,6 +281,7 @@ def _aggregate_active_trades(
                 low=trade.price,
                 close=trade.price,
                 volume=trade.quantity,
+                notional=trade.price * trade.quantity,
                 trades=1,
                 first_key=order_key,
                 last_key=order_key,
@@ -294,7 +297,7 @@ def _write_candles(output_path: Path, candles: dict[datetime, Candle]) -> None:
     try:
         with temp_path.open("w", encoding="utf-8", newline="") as target:
             writer = csv.writer(target, lineterminator="\n")
-            writer.writerow(("datetime", "contract", "open", "high", "low", "close", "volume", "trades"))
+            writer.writerow(("datetime", "contract", "open", "high", "low", "close", "volume", "notional", "trades"))
             for minute in sorted(candles):
                 candle = candles[minute]
                 writer.writerow(
@@ -306,6 +309,7 @@ def _write_candles(output_path: Path, candles: dict[datetime, Candle]) -> None:
                         decimal_text(candle.low),
                         decimal_text(candle.close),
                         candle.volume,
+                        decimal_text(candle.notional),
                         candle.trades,
                     )
                 )

@@ -27,6 +27,13 @@ test('aggregates OHLC and preserves volume and trade totals', () => {
   });
 });
 
+test('aggregates exact trade notional without synthesizing it from OHLC', () => {
+  const source = [minute(9, 0, { volume: 2, notional: 20 }), minute(9, 1, { volume: 3, notional: 36 })];
+  const [result] = aggregateCandles(source, 5);
+  assert.equal(result.notional, 56);
+  assert.equal(result.volume, 5);
+});
+
 test('aligns buckets to clock boundaries', () => {
   const source = [minute(9, 4), minute(9, 5), minute(9, 9), minute(9, 10)];
   const result = aggregateCandles(source, 5);
