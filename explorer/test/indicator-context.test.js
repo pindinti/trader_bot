@@ -23,7 +23,7 @@ function candles(day, count, startMinute = 0) {
   }));
 }
 
-test('warmup starts with the previous manifest session and spans multiple sessions when needed', async () => {
+test('indicator warmup extends beyond the baseline previous session when needed', async () => {
   const entries = ['2026-09-17', '2026-09-18', '2026-09-21'].map((date) => ({ date }));
   const source = new Map([
     ['2026-09-17', candles(17, 10)],
@@ -36,6 +36,36 @@ test('warmup starts with the previous manifest session and spans multiple sessio
   });
   assert.deepEqual(loaded, ['2026-09-18', '2026-09-17']);
   assert.deepEqual(sessions.map(({ date }) => date), ['2026-09-17', '2026-09-18']);
+});
+
+test('baseline context loads exactly one previous available manifest session without indicators', async () => {
+  const entries = ['2026-09-17', '2026-09-18', '2026-09-21'].map((date) => ({ date }));
+  const loaded = [];
+  const sessions = await loadWarmupSessions({
+    entries, currentDate: '2026-09-21', timeframe: 1, requiredBars: 0,
+    loadDay: async (date) => { loaded.push(date); return candles(Number(date.slice(-2)), 3); },
+  });
+  assert.deepEqual(loaded, ['2026-09-18']);
+  assert.deepEqual(sessions.map(({ date }) => date), ['2026-09-18']);
+});
+
+test('baseline context follows manifest order across calendar gaps', async () => {
+  const entries = ['2026-09-01', '2026-09-04', '2026-09-08'].map((date) => ({ date }));
+  const sessions = await loadWarmupSessions({
+    entries, currentDate: '2026-09-08', timeframe: 1,
+    loadDay: async (date) => candles(Number(date.slice(-2)), 2),
+  });
+  assert.deepEqual(sessions.map(({ date }) => date), ['2026-09-04']);
+});
+
+test('first manifest session has no prior context and does not fail', async () => {
+  let loadCalls = 0;
+  const sessions = await loadWarmupSessions({
+    entries: [{ date: '2026-09-01' }], currentDate: '2026-09-01', timeframe: 1,
+    loadDay: async () => { loadCalls += 1; return []; },
+  });
+  assert.deepEqual(sessions, []);
+  assert.equal(loadCalls, 0);
 });
 
 test('authenticated daily cache reuses a private object and rejects dates outside the manifest', async () => {

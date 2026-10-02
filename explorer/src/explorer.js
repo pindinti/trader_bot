@@ -314,11 +314,8 @@ async function refreshIndicatorContext({ preserveViewport = 'time' } = {}) {
   const generation = ++indicatorLoadGeneration;
   state.priorSessions = [];
   const requiredBars = largestMovingAveragePeriod(new Set([...state.enabledIndicators].filter((key) => key !== 'vwap')));
-  if (!requiredBars || !state.currentDate || !dayCache) {
-    elements.movingAverageState.textContent = requiredBars
-      ? 'Contexto indisponível'
-      : (state.enabledIndicators.size ? 'Indicador da sessão atual' : 'Nenhum indicador ativo');
-    if (state.currentDate && state.baseCandles.length) renderTimeframe({ preserveViewport });
+  if (!state.currentDate || !dayCache) {
+    elements.movingAverageState.textContent = 'Contexto indisponível';
     return;
   }
 
@@ -338,8 +335,10 @@ async function refreshIndicatorContext({ preserveViewport = 'time' } = {}) {
       0,
     );
     elements.movingAverageState.textContent = sessions.length
-      ? `${completed} candles de aquecimento · ${sessions.length} pregão${sessions.length === 1 ? '' : 'es'}`
-      : 'Histórico anterior indisponível';
+      ? (requiredBars
+        ? `${completed} candles de aquecimento · ${sessions.length} pregão${sessions.length === 1 ? '' : 'es'}`
+        : `Contexto · pregão anterior ${sessions.at(-1).date.split('-').reverse().join('/')}`)
+      : (requiredBars ? 'Histórico anterior insuficiente ou indisponível' : 'Sem pregão anterior disponível');
     renderTimeframe({ preserveViewport });
   } catch (error) {
     if (!active || generation !== indicatorLoadGeneration) return;

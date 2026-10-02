@@ -10,7 +10,7 @@ test('candle numbering follows emitted candles at every supported timeframe', ()
   for (const timeframe of SUPPORTED_TIMEFRAMES) {
     const candles = [0, 1, 2].map((index) => ({ time: start + index * timeframe * 60 }));
     const displayTime = new Date(candles[1].time * 1000).toISOString().slice(11, 16);
-    assert.equal(candleReference(candles, candles[1], timeframe), `Candle 2 · ${timeframe}m · ${displayTime}`);
+    assert.equal(candleReference(candles, candles[1], timeframe), `Candle 2 · ${timeframe}m · 21/09 ${displayTime}`);
   }
 });
 
@@ -18,7 +18,7 @@ test('replay candle numbering cannot count hidden future candles', () => {
   const start = Date.UTC(2026, 8, 21, 10) / 1000;
   const full = [0, 1, 2].map((index) => ({ time: start + index * 60 }));
   const prefix = full.slice(0, 2);
-  assert.equal(candleReference(prefix, prefix.at(-1), 1), 'Candle 2 · 1m · 10:01');
+  assert.equal(candleReference(prefix, prefix.at(-1), 1), 'Candle 2 · 1m · 21/09 10:01');
   assert.equal(candleReference(prefix, full.at(-1), 1), null);
 });
 
@@ -28,9 +28,9 @@ test('candle numbering resets independently for prior and active sessions', () =
   const previous = [0, 1, 2].map((index) => ({ time: previousStart + index * 2 * 60 }));
   const active = [0, 1].map((index) => ({ time: activeStart + index * 2 * 60 }));
   const chartCandles = [...previous, ...active];
-  assert.equal(candleReference(chartCandles, previous[2], 2), 'Candle 3 · 2m · 16:04');
-  assert.equal(candleReference(chartCandles, active[0], 2), 'Candle 1 · 2m · 09:00');
-  assert.equal(candleReference(chartCandles, active[1], 2), 'Candle 2 · 2m · 09:02');
+  assert.equal(candleReference(chartCandles, previous[2], 2), 'Candle 3 · 2m · 22/09 16:04');
+  assert.equal(candleReference(chartCandles, active[0], 2), 'Candle 1 · 2m · 23/09 09:00');
+  assert.equal(candleReference(chartCandles, active[1], 2), 'Candle 2 · 2m · 23/09 09:02');
 });
 
 test('external indicator legend uses the latest completed available value', () => {

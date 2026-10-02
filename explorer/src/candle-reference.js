@@ -11,6 +11,8 @@ export function candleReference(candles, candle, timeframeMinutes) {
     }
   }
   if (!found) return null;
-  const time = new Date(candle.time * 1000).toISOString().slice(11, 16);
-  return `Candle ${ordinal} · ${timeframeMinutes}m · ${time}`;
+  const value = new Date(candle.time * 1000);
+  const date = `${String(value.getUTCDate()).padStart(2, '0')}/${String(value.getUTCMonth() + 1).padStart(2, '0')}`;
+  const time = value.toISOString().slice(11, 16);
+  return `Candle ${ordinal} · ${timeframeMinutes}m · ${date} ${time}`;
 }

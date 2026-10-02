@@ -43,19 +43,19 @@ export function createAuthenticatedDayCache({ contract, entries, download }) {
   return { load, clear: () => cache.clear(), has: (date) => cache.has(date) };
 }
 
-export async function loadWarmupSessions({ entries, currentDate, timeframe, requiredBars, loadDay }) {
-  if (!Number.isInteger(requiredBars) || requiredBars <= 0) return [];
-  if (!entries.some(({ date }) => date === currentDate)) {
+export async function loadWarmupSessions({ entries, currentDate, timeframe, requiredBars = 0, baselineSessions = 1, loadDay }) {
+  if (!Number.isInteger(requiredBars) || requiredBars < 0) throw new TypeError('Required bars must be a non-negative integer');
+  if (!Number.isInteger(baselineSessions) || baselineSessions < 0) throw new TypeError('Baseline sessions must be a non-negative integer');
+  const currentIndex = entries.findIndex(({ date }) => date === currentDate);
+  if (currentIndex < 0) {
     throw new Error(`O pregão ${currentDate} não está no manifesto.`);
   }
-  const precedingEntries = entries
-    .filter(({ date }) => date < currentDate)
-    .sort((left, right) => right.date.localeCompare(left.date));
+  const precedingEntries = entries.slice(0, currentIndex).reverse();
 
   const reverseChronological = [];
   let completedBars = 0;
   for (const entry of precedingEntries) {
-    if (completedBars >= requiredBars) break;
+    if (reverseChronological.length >= baselineSessions && completedBars >= requiredBars) break;
     const candles = await loadDay(entry.date);
     reverseChronological.push({ date: entry.date, candles });
     completedBars += aggregateCompletedSession(candles, timeframe).length;

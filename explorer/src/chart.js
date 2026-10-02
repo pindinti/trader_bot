@@ -27,7 +27,7 @@ export function findDayBoundaryTimes(candles) {
   let previousDay = null;
   for (const candle of candles) {
     const day = new Date(candle.time * 1000).toISOString().slice(0, 10);
-    if (previousDay !== null && day !== previousDay) boundaries.add(candle.time);
+    if (day !== previousDay) boundaries.add(candle.time);
     previousDay = day;
   }
   return boundaries;

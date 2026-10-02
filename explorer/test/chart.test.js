@@ -76,7 +76,7 @@ test('time-axis ticks use exchange-wall-clock UTC projection and label day bound
   const prior = Date.UTC(2026, 8, 18, 18, 29) / 1000;
   const selected = Date.UTC(2026, 8, 21, 9, 0) / 1000;
   const boundaries = findDayBoundaryTimes([{ time: prior }, { time: selected }, { time: selected + 60 }]);
-  assert.equal(formatTimeAxisTick(prior, boundaries), '18:29');
+  assert.equal(formatTimeAxisTick(prior, boundaries), '18/09 18:29');
   assert.equal(formatTimeAxisTick(selected, boundaries), '21/09 09:00');
   assert.equal(formatTimeAxisTick(selected + 60, boundaries), '09:01');
 });
