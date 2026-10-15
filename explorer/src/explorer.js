@@ -1,4 +1,10 @@
 import { createMarketChart } from './chart.js';
+import {
+  ANALYSIS_MODE,
+  captureAnalysisSaveIntent,
+  enterCreateAnalysisMode,
+  enterEditAnalysisMode,
+} from './analysis-mode.js';
 import { candleReference } from './candle-reference.js';
 import { validateManifest, wallClockToTimestamp } from './data.js';
 import { DRAWING_COLOR_PALETTE, DRAWING_LINE_WIDTH, parseFibonacciLevels } from './drawings.js';
@@ -349,7 +355,7 @@ async function refreshIndicatorContext({ preserveViewport = 'time' } = {}) {
 }
 
 function clearActiveResearch({ clearDrawings = true } = {}) {
-  state.currentRecordId = null;
+  enterCreateAnalysisMode(state);
   state.selection = null;
   chart.setSelection(null);
   if (clearDrawings) chart.setDrawings([]);
@@ -360,6 +366,18 @@ function clearActiveResearch({ clearDrawings = true } = {}) {
 
 function confirmDiscard() {
   return !state.dirty || window.confirm('Descartar as alterações não salvas desta análise?');
+}
+
+function beginNewAnalysis({ confirmUnsaved = true } = {}) {
+  const entered = enterCreateAnalysisMode(state, {
+    confirmDiscard: confirmUnsaved ? confirmDiscard : () => true,
+  });
+  if (!entered) return false;
+  resetForm();
+  showResearchPanel();
+  markDirty();
+  renderSavedRecords();
+  return true;
 }
 
 async function loadDay(day, { preserveResearch = false, replayContext = null } = {}) {
@@ -584,7 +602,7 @@ function populateForm(record) {
   form.target.value = record.target ?? '';
   renderFactorList(record.factors);
   renderAnalysisType(record.analysisType);
-  elements.researchTitle.textContent = PATTERN_LABELS[record.pattern] ?? 'Análise';
+  elements.researchTitle.textContent = 'Editando análise';
   elements.deleteResearch.hidden = record.authorId !== state.session?.user.id;
   const own = record.authorId === state.session?.user.id;
   elements.researchForm.querySelectorAll('input, textarea, select').forEach((input) => { input.disabled = !own; });
@@ -600,7 +618,7 @@ async function openRecord(record) {
     const plan = buildAnalysisRestorePlan(record, state.dates.map(({ date }) => date));
     replay.pause();
     restoringAnalysis = true;
-    state.currentRecordId = record.id;
+    enterEditAnalysisMode(state, record.id);
     chart.setMode('navigate');
     state.timeframe = plan.timeframeMinutes;
     state.priorSessions = [];
@@ -871,21 +889,11 @@ elements.drawingColorPalette.addEventListener('click', (event) => {
 });
 elements.openResearch.addEventListener('click', () => {
   if (!canCreateAnalysis(state.selection, chart.getDrawings())) return;
-  resetForm();
-  showResearchPanel();
-  markDirty();
+  beginNewAnalysis();
 });
 elements.closeResearch.addEventListener('click', closeResearchPanel);
 elements.newResearch.addEventListener('click', () => {
-  if (!confirmDiscard()) return;
-  state.currentRecordId = null;
-  chart.setDrawings([]);
-  resetForm();
-  elements.researchPanel.hidden = true;
-  elements.analysisGrid.classList.remove('panel-open');
-  renderSelection();
-  renderSavedRecords();
-  renderReplayControls();
+  beginNewAnalysis();
 });
 
 elements.dateSelect.addEventListener('change', async () => {
@@ -943,11 +951,14 @@ elements.researchForm.addEventListener('submit', async (event) => {
   if (errors.length) return;
   elements.saveResearch.disabled = true;
   elements.saveState.textContent = 'Salvando…';
+  const saveIntent = captureAnalysisSaveIntent(state);
   try {
-    const saved = await saveResearchRecord(draft, state.currentRecordId);
+    const saved = await saveResearchRecord(draft, saveIntent.recordId);
     if (!active) return;
-    state.currentRecordId = saved.id;
-    elements.saveState.textContent = 'Análise salva';
+    enterEditAnalysisMode(state, saved.id);
+    elements.saveState.textContent = saveIntent.mode === ANALYSIS_MODE.CREATE
+      ? 'Nova análise criada'
+      : 'Análise atualizada';
     markClean('Salva agora');
     await loadSavedRecords();
     await loadAnalysisHistory();
