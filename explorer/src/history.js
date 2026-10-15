@@ -96,9 +96,11 @@ export function canAccessAnalysisHistory(member) {
   return Boolean(member?.user_id);
 }
 
-export function buildAnalysisRestorePlan(record, availableDates) {
-  if (!record?.id || !availableDates.includes(record.tradingDate)) {
-    throw new TypeError('A data desta análise não está disponível no Explorer.');
+export function buildAnalysisRestorePlan(record, availableSessions) {
+  if (!record?.id || !Array.isArray(availableSessions) || !availableSessions.some((session) => (
+    session.contract === record.contract && session.date === record.tradingDate
+  ))) {
+    throw new TypeError('O contrato e a data desta análise não estão disponíveis no Explorer.');
   }
   if (!SUPPORTED_TIMEFRAMES.includes(record.timeframeMinutes)) {
     throw new TypeError('A análise possui um timeframe incompatível.');
@@ -125,6 +127,7 @@ export function buildAnalysisRestorePlan(record, availableDates) {
   }
   return {
     analysisType,
+    contract: record.contract,
     tradingDate: record.tradingDate,
     timeframeMinutes: record.timeframeMinutes,
     selection: { startTimestamp: record.startTimestamp, endTimestamp: record.endTimestamp },

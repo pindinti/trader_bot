@@ -12,26 +12,70 @@ export function wallClockToTimestamp(value) {
 }
 
 export function validateManifest(manifest) {
-  if (![1, 2].includes(manifest?.schemaVersion) || manifest?.sourceTimeframeMinutes !== 1 || !Array.isArray(manifest.contracts)) {
+  if (
+    ![1, 2].includes(manifest?.schemaVersion)
+    || manifest?.sourceTimeframeMinutes !== 1
+    || !Array.isArray(manifest.contracts)
+    || manifest.contracts.length === 0
+  ) {
     throw new TypeError('Manifesto de dados incompatível. Execute novamente o exportador.');
   }
-  const contract = manifest.contracts[0];
-  if (!contract?.symbol || !Array.isArray(contract.dates)) {
-    throw new TypeError('Manifesto não contém contratos exportados.');
-  }
+  const contracts = [];
+  const sessions = [];
+  const seenContracts = new Set();
   const seenDates = new Set();
-  for (const entry of contract.dates) {
-    if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(entry?.date)
-      || seenDates.has(entry.date)
-      || entry.file !== `${contract.symbol}/${entry.date}.json`
-    ) {
-      throw new TypeError('Manifesto contém uma referência diária inválida.');
+  for (const contract of manifest.contracts) {
+    const symbol = contract?.symbol;
+    if (typeof symbol !== 'string' || !/^[A-Z0-9]+$/.test(symbol) || !Array.isArray(contract.dates)) {
+      throw new TypeError('Manifesto não contém contratos exportados válidos.');
     }
-    validateCandleObjectPath(entry.file);
-    seenDates.add(entry.date);
+    if (seenContracts.has(symbol)) throw new TypeError(`Manifesto contém contrato duplicado: ${symbol}.`);
+    seenContracts.add(symbol);
+    const dates = [];
+    for (const entry of contract.dates) {
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(entry?.date)
+        || !isCalendarDate(entry.date)
+        || seenDates.has(entry.date)
+        || entry.file !== `${symbol}/${entry.date}.json`
+      ) {
+        throw new TypeError('Manifesto contém uma referência diária inválida ou ambígua.');
+      }
+      validateCandleObjectPath(entry.file);
+      const session = Object.freeze({ ...entry, contract: symbol });
+      dates.push(session);
+      sessions.push(session);
+      seenDates.add(entry.date);
+    }
+    contracts.push(Object.freeze({ symbol, dates: Object.freeze(dates) }));
   }
-  return contract;
+  sessions.sort((left, right) => left.date.localeCompare(right.date));
+  return Object.freeze({
+    schemaVersion: manifest.schemaVersion,
+    sourceTimeframeMinutes: manifest.sourceTimeframeMinutes,
+    contracts: Object.freeze(contracts),
+    sessions: Object.freeze(sessions),
+  });
+}
+
+function isCalendarDate(value) {
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
+export function resolvePublishedSession(sessions, { contract = null, date }) {
+  if (!Array.isArray(sessions) || !/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) {
+    throw new TypeError('Referência de pregão inválida.');
+  }
+  const matches = sessions.filter((session) => (
+    session.date === date && (contract === null || session.contract === contract)
+  ));
+  if (matches.length !== 1) {
+    const identity = contract ? `${contract} em ${date}` : date;
+    throw new TypeError(`O pregão ${identity} não está disponível de forma inequívoca no Explorer.`);
+  }
+  return matches[0];
 }
 
 export function parseDayPayload(payload, expectedContract, expectedDate) {

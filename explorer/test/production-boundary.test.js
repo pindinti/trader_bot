@@ -17,13 +17,14 @@ test('Vite cannot copy local candle staging into the production build', async ()
   const exporter = await readFile(new URL('../../scripts/export_explorer.py', import.meta.url), 'utf8');
   assert.match(config, /publicDir:\s*false/);
   assert.match(rootIgnore, /data\/explorer_storage\//);
+  assert.match(rootIgnore, /data\/explorer_storage_\*\//);
   assert.match(exporter, /data" \/ "explorer_storage"/);
   assert.doesNotMatch(exporter, /explorer" \/ "public" \/ "data"/);
 
   const publicDirectory = new URL('../public/', import.meta.url);
   const publicFiles = await readOptionalPublicFiles(publicDirectory);
   assert.equal(publicFiles.some((path) => /(?:^|[\\/])manifest\.json$/.test(path)), false);
-  assert.equal(publicFiles.some((path) => /WDOV26[\\/].+\.json$/.test(path)), false);
+  assert.equal(publicFiles.some((path) => /WDO[A-Z0-9]+[\\/].+\.json$/.test(path)), false);
 });
 
 test('a missing public directory is treated as empty', async () => {

@@ -44,6 +44,8 @@ WDOV26/2026-09-18.json
 WDOV26/2026-09-21.json
 ```
 
+The private manifest may publish more than one real monthly contract. The Explorer flattens those entries into one chronological trading-session selector, while every date retains the explicit contract and object path declared by the manifest. Contract transitions are publication decisions in the dataset; the frontend does not infer rollover, combine prices, or construct a continuous contract. Previous-session chart context and moving-average warmup walk backward only within the active real contract.
+
 Raw trades, filtered trades, audits, and staged candle JSON must never be placed under `explorer/public/`. Vite public-directory copying is disabled and the production build runs an additional check that rejects `dist/data`.
 
 ### Apply private Storage authorization
@@ -57,7 +59,7 @@ Review existing policies in **Storage → Policies** as well. PostgreSQL RLS pol
 Uploads are deliberately administrative and manual; the frontend has no write policy or upload code.
 
 1. In the Supabase Dashboard, open **Storage → trade-bot-candles** and confirm the bucket is private.
-2. Create/open the `WDOV26` folder and upload the six staged daily JSON files from `data/explorer_storage/WDOV26/`. Preserve each filename and use `application/json`. Replace an existing object only when intentionally publishing a regenerated audited file.
+2. Create/open each contract folder declared by the manifest and upload its staged daily JSON files. Preserve each contract/date path and use `application/json`. Replace an existing object only when intentionally publishing a regenerated audited file.
 3. Return to the bucket root and upload `data/explorer_storage/manifest.json` as `manifest.json` **after** every referenced daily object exists.
 4. Confirm the Dashboard object paths exactly match the layout above. Do not create an extra `explorer_storage` or `data` prefix.
 

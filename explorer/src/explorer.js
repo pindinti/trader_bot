@@ -6,7 +6,7 @@ import {
   enterEditAnalysisMode,
 } from './analysis-mode.js';
 import { candleReference } from './candle-reference.js';
-import { validateManifest, wallClockToTimestamp } from './data.js';
+import { resolvePublishedSession, validateManifest, wallClockToTimestamp } from './data.js';
 import { DRAWING_COLOR_PALETTE, DRAWING_LINE_WIDTH, parseFibonacciLevels } from './drawings.js';
 import {
   DIRECTION_LABELS,
@@ -77,7 +77,7 @@ const dateLabel = new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC', weekday: '
 
 const state = {
   contract: null,
-  dates: [],
+  sessions: [],
   currentDate: null,
   baseCandles: [],
   candles: [],
@@ -331,11 +331,12 @@ async function refreshIndicatorContext({ preserveViewport = 'time' } = {}) {
   elements.movingAverageState.textContent = 'Carregando contexto…';
   try {
     const sessions = await loadWarmupSessions({
-      entries: state.dates,
+      entries: state.sessions,
+      currentContract: state.contract,
       currentDate: state.currentDate,
       timeframe: state.timeframe,
       requiredBars,
-      loadDay: (date) => dayCache.load(date),
+      loadDay: ({ contract, date }) => dayCache.load(contract, date),
     });
     if (!active || generation !== indicatorLoadGeneration) return;
     state.priorSessions = sessions;
@@ -383,7 +384,7 @@ function beginNewAnalysis({ confirmUnsaved = true } = {}) {
   return true;
 }
 
-async function loadDay(day, { preserveResearch = false, replayContext = null } = {}) {
+async function loadDay(day, { preserveResearch = false, replayContext = null, expectedContract = null } = {}) {
   loadingDay = true;
   indicatorLoadGeneration += 1;
   state.baseCandles = [];
@@ -395,10 +396,14 @@ async function loadDay(day, { preserveResearch = false, replayContext = null } =
   elements.dateSelect.disabled = true;
   try {
     if (!dayCache) throw new Error('O cache autenticado de candles não foi inicializado.');
-    const candles = await dayCache.load(day);
+    const publishedSession = resolvePublishedSession(state.sessions, { contract: expectedContract, date: day });
+    const candles = await dayCache.load(publishedSession.contract, publishedSession.date);
     if (!active) return;
     state.baseCandles = candles;
-    state.currentDate = day;
+    state.contract = publishedSession.contract;
+    state.currentDate = publishedSession.date;
+    elements.contractValue.textContent = publishedSession.contract;
+    elements.chartContract.textContent = publishedSession.contract;
     const vwapButton = elements.movingAverageControl.querySelector('[data-indicator="vwap"]');
     const exactVwapAvailable = hasExactVwap(candles);
     vwapButton.disabled = !exactVwapAvailable;
@@ -406,7 +411,7 @@ async function loadDay(day, { preserveResearch = false, replayContext = null } =
     if (!exactVwapAvailable) state.enabledIndicators.delete('vwap');
     replay.load(state.baseCandles);
     if (replayContext) replay.restore(replayContext);
-    elements.chartDate.textContent = dateLabel.format(new Date(`${day}T00:00:00Z`));
+    elements.chartDate.textContent = dateLabel.format(new Date(`${publishedSession.date}T00:00:00Z`));
     if (!preserveResearch) clearActiveResearch();
     await refreshIndicatorContext({ preserveViewport: false });
     await loadSavedRecords();
@@ -618,7 +623,7 @@ function populateForm(record) {
 async function openRecord(record) {
   if (!confirmDiscard()) return false;
   try {
-    const plan = buildAnalysisRestorePlan(record, state.dates.map(({ date }) => date));
+    const plan = buildAnalysisRestorePlan(record, state.sessions);
     replay.pause();
     restoringAnalysis = true;
     enterEditAnalysisMode(state, record.id);
@@ -628,11 +633,17 @@ async function openRecord(record) {
     indicatorLoadGeneration += 1;
     elements.timeframeControl.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.minutes) === state.timeframe)));
     replay.setStepMinutes(state.timeframe);
-    if (plan.tradingDate !== state.currentDate) {
+    if (plan.tradingDate !== state.currentDate || plan.contract !== state.contract) {
       elements.dateSelect.value = plan.tradingDate;
-      await loadDay(plan.tradingDate, { preserveResearch: true, replayContext: plan.replay });
+      await loadDay(plan.tradingDate, {
+        preserveResearch: true,
+        replayContext: plan.replay,
+        expectedContract: plan.contract,
+      });
       if (!active) return false;
-      if (state.currentDate !== plan.tradingDate || !state.baseCandles.length) throw new Error('Não foi possível carregar o pregão desta análise.');
+      if (state.contract !== plan.contract || state.currentDate !== plan.tradingDate || !state.baseCandles.length) {
+        throw new Error('Não foi possível carregar o contrato e o pregão desta análise.');
+      }
     } else if (plan.replay) {
       replay.restore(plan.replay);
     } else {
@@ -711,7 +722,7 @@ function renderSavedRecords() {
 }
 
 async function loadAnalysisHistory() {
-  if (!canAccessAnalysisHistory(state.member) || !state.contract) {
+  if (!canAccessAnalysisHistory(state.member) || !state.sessions.length) {
     state.historyRecords = [];
     renderAnalysisHistory();
     return;
@@ -721,7 +732,10 @@ async function loadAnalysisHistory() {
   elements.historyState.textContent = 'Carregando análises…';
   elements.historyList.replaceChildren();
   try {
-    const records = await listResearchHistory(state.contract);
+    const contracts = [...new Set(state.sessions.map(({ contract }) => contract))];
+    const records = (await Promise.all(contracts.map((contract) => listResearchHistory(contract))))
+      .flat()
+      .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
     if (!active) return;
     state.historyRecords = records;
     renderAnalysisHistory();
@@ -833,19 +847,15 @@ async function bootstrap() {
   try {
     const manifest = await downloadCandleJson('manifest.json');
     if (!active) return;
-    const contract = validateManifest(manifest);
-    state.contract = contract.symbol;
-    state.dates = contract.dates;
+    const published = validateManifest(manifest);
+    state.sessions = [...published.sessions];
     dayCache = createAuthenticatedDayCache({
-      contract: state.contract,
-      entries: state.dates,
+      sessions: state.sessions,
       download: downloadCandleJson,
     });
-    elements.contractValue.textContent = contract.symbol;
-    elements.chartContract.textContent = contract.symbol;
-    elements.dateSelect.innerHTML = contract.dates.map(({ date }) => `<option value="${date}">${date.split('-').reverse().join('/')}</option>`).join('');
-    if (!contract.dates.length) return showChartState('empty', 'Nenhum pregão exportado', 'Execute o exportador para disponibilizar dados.');
-    elements.dateSelect.value = contract.dates.at(-1).date;
+    elements.dateSelect.innerHTML = state.sessions.map(({ date }) => `<option value="${date}">${date.split('-').reverse().join('/')}</option>`).join('');
+    if (!state.sessions.length) return showChartState('empty', 'Nenhum pregão exportado', 'Execute o exportador para disponibilizar dados.');
+    elements.dateSelect.value = state.sessions.at(-1).date;
     renderFactorList([]);
     await loadDay(elements.dateSelect.value);
     if (!active) return;
@@ -1034,6 +1044,7 @@ function destroy() {
   state.enabledIndicators.clear();
   state.records = [];
   state.historyRecords = [];
+  state.sessions = [];
   state.selection = null;
   state.currentRecordId = null;
   state.dirty = false;

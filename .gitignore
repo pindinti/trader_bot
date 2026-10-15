@@ -4,6 +4,7 @@ data/wdo/
 data/audit/
 data/candles/
 data/explorer_storage/
+data/explorer_storage_*/
 data/research/
 
 # Python-generated caches.

@@ -27,6 +27,8 @@ Historical B3 files remain local under ignored `data/` directories.
 
 The exporter creates a schema-version-2 `manifest.json` and daily objects at paths such as `WDOV26/2026-09-21.json`. The manifest declares a one-minute source timeframe and identifies available dates, object paths, candle counts, and aggregate notional. Raw trades, filtered trades, candle CSVs, and audit reports are not browser inputs. The frontend still reads legacy schema-version-1 objects, but exact VWAP is unavailable for those objects.
 
+A manifest may declare multiple real monthly contracts. The frontend validates every contract, rejects duplicate symbols or dates that would make ownership ambiguous, and normalizes all published dates into one chronological session index. Each session retains its declared `{ contract, date, file }` identity; selecting a date changes the active real contract accordingly. Contract transitions are explicit dataset decisions, never volume-inferred rollovers or synthetic continuous prices.
+
 Exported objects are staged in ignored `data/explorer_storage/` and uploaded manually, with daily objects uploaded before the manifest. Detailed update commands remain in [the Explorer README](../explorer/README.md).
 
 ### 2. Private data and authorization boundary
@@ -49,6 +51,8 @@ The frontend is a Vite/vanilla JavaScript application using TradingView Lightwei
 After authorization, [`explorer/src/candle-storage.js`](../explorer/src/candle-storage.js) downloads private JSON through the authenticated Storage client. [`explorer/src/data.js`](../explorer/src/data.js) validates the manifest and day payload before chart use. [`explorer/src/aggregate.js`](../explorer/src/aggregate.js) derives the 2, 5, 10, 15, 30, and 60-minute views from the one-minute source, aligns buckets to wall-clock interval boundaries, preserves volume, trade-notional, and trade-count totals, and does not synthesize missing minutes.
 
 Optional SMA and EMA overlays use 9, 21, or 200 completed closes from the active chart timeframe. EMA is seeded with the SMA of its first `N` values and then uses `alpha = 2 / (N + 1)`. The authenticated daily cache loads preceding available manifest sessions, newest first, until the largest enabled period has enough prior completed bars or history is exhausted. Those prior candles are visible chart context; they are never inserted into replay's detector-facing market view. Exact parity with Nelogica Profit's EMA implementation remains unverified.
+
+The cache identity includes both contract and date. Baseline previous-session context and moving-average warmup are contract-local: the first published session of a new monthly contract does not consume the previous contract's candles, even when that previous contract owns the immediately preceding date in the combined navigation timeline.
 
 ### 4. Drawings and analyses
 

@@ -13,6 +13,7 @@ import {
 
 const selection = { startTimestamp: 1000, endTimestamp: 1300 };
 const drawing = { schemaVersion: 1, id: 'h1', type: 'horizontal', anchors: [{ time: 1100, price: 5140.5 }] };
+const published = (contract, date) => ({ contract, date, file: `${contract}/${date}.json` });
 
 test('authorized history access does not depend on movement selection or drawings', () => {
   assert.equal(canAccessAnalysisHistory({ user_id: 'member-1' }), true);
@@ -29,6 +30,7 @@ test('new analysis requires both a selected movement and at least one drawing', 
 test('opening saved analysis restores date, timeframe, interval, and drawings', () => {
   const record = {
     id: 'analysis-1',
+    contract: 'WDOV26',
     tradingDate: '2026-09-18',
     timeframeMinutes: 15,
     startTimestamp: 1000,
@@ -36,8 +38,9 @@ test('opening saved analysis restores date, timeframe, interval, and drawings', 
     analysisCutoffTimestamp: 1300,
     drawings: [drawing],
   };
-  assert.deepEqual(buildAnalysisRestorePlan(record, ['2026-09-18', '2026-09-21']), {
+  assert.deepEqual(buildAnalysisRestorePlan(record, [published('WDOV26', '2026-09-18'), published('WDOV26', '2026-09-21')]), {
     analysisType: 'retrospective',
+    contract: 'WDOV26',
     tradingDate: '2026-09-18',
     timeframeMinutes: 15,
     selection,
@@ -49,6 +52,7 @@ test('opening saved analysis restores date, timeframe, interval, and drawings', 
 test('opening a replay analysis includes its deterministic restoration snapshot', () => {
   const record = {
     id: 'analysis-replay',
+    contract: 'WDOV26',
     analysisType: 'replay',
     tradingDate: '2026-09-21',
     timeframeMinutes: 5,
@@ -59,7 +63,7 @@ test('opening a replay analysis includes its deterministic restoration snapshot'
     replayPosition: 10,
     drawings: [drawing],
   };
-  assert.deepEqual(buildAnalysisRestorePlan(record, ['2026-09-21']).replay, {
+  assert.deepEqual(buildAnalysisRestorePlan(record, [published('WDOV26', '2026-09-21')]).replay, {
     simulatedTimestamp: 1600,
     position: 10,
   });
@@ -75,10 +79,10 @@ test('opening a saved analysis restores a market-anchored text annotation', () =
     color: '#70d9d2',
   };
   const plan = buildAnalysisRestorePlan({
-    id: 'analysis-with-text', tradingDate: '2026-09-21', timeframeMinutes: 5,
+    id: 'analysis-with-text', contract: 'WDOV26', tradingDate: '2026-09-21', timeframeMinutes: 5,
     startTimestamp: 1000, endTimestamp: 1300, analysisCutoffTimestamp: 1300,
     drawings: [textDrawing],
-  }, ['2026-09-21']);
+  }, [published('WDOV26', '2026-09-21')]);
   assert.equal(plan.drawings[0].schemaVersion, 1);
   assert.equal(plan.drawings[0].id, textDrawing.id);
   assert.equal(plan.drawings[0].text, textDrawing.text);
@@ -88,10 +92,25 @@ test('opening a saved analysis restores a market-anchored text annotation', () =
 
 test('two-minute analyses are valid restoration targets', () => {
   const plan = buildAnalysisRestorePlan({
-    id: 'analysis-2m', tradingDate: '2026-09-21', timeframeMinutes: 2,
+    id: 'analysis-2m', contract: 'WDOV26', tradingDate: '2026-09-21', timeframeMinutes: 2,
     startTimestamp: 1000, endTimestamp: 1060, analysisCutoffTimestamp: 1060, drawings: [drawing],
-  }, ['2026-09-21']);
+  }, [published('WDOV26', '2026-09-21')]);
   assert.equal(plan.timeframeMinutes, 2);
+});
+
+test('analysis restoration resolves the exact published contract and date pair', () => {
+  const sessions = [published('WDOV26', '2026-09-29'), published('WDOX26', '2026-09-30')];
+  const record = {
+    id: 'x-analysis', contract: 'WDOX26', tradingDate: '2026-09-30', timeframeMinutes: 5,
+    startTimestamp: 1000, endTimestamp: 1300, analysisCutoffTimestamp: 1300, drawings: [drawing],
+  };
+  const plan = buildAnalysisRestorePlan(record, sessions);
+  assert.equal(plan.contract, 'WDOX26');
+  assert.equal(plan.tradingDate, '2026-09-30');
+  assert.throws(
+    () => buildAnalysisRestorePlan({ ...record, contract: 'WDOV26' }, sessions),
+    /contrato e a data.*não estão disponíveis/i,
+  );
 });
 
 test('history renders market context safely and search is accent/case insensitive without reordering', () => {
