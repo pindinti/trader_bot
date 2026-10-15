@@ -1,6 +1,14 @@
 export const DRAWING_SCHEMA_VERSION = 1;
 export const DEFAULT_FIBONACCI_LEVELS = Object.freeze([0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]);
-export const DRAWING_TYPES = Object.freeze(['horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle']);
+export const DRAWING_TYPES = Object.freeze(['horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle', 'text']);
+export const DRAWING_TEXT_STYLE = Object.freeze({
+  font: '500 12px "DM Mono", monospace',
+  lineHeight: 16,
+  paddingX: 6,
+  paddingY: 5,
+  offsetX: 7,
+  offsetY: -7,
+});
 export const DRAWING_LINE_WIDTH = Object.freeze({ default: 1.25, min: 0.5, max: 4, step: 0.25 });
 export const DRAWING_COLOR_PALETTE = Object.freeze([
   Object.freeze({ value: '#75a88e', label: 'Verde sálvia' }),
@@ -47,9 +55,16 @@ export function normalizeDrawingColor(value) {
   return color;
 }
 
+export function normalizeDrawingText(value) {
+  if (typeof value !== 'string') throw new TypeError('Text drawing content must be a string');
+  const text = value.replace(/\r\n?/g, '\n').trim();
+  if (!text) throw new TypeError('Text drawing content cannot be empty');
+  return text;
+}
+
 export function createDrawing(type, anchors, options = {}) {
   if (!DRAWING_TYPES.includes(type)) throw new TypeError(`Unsupported drawing type: ${type}`);
-  const requiredAnchors = type === 'horizontal' ? 1 : 2;
+  const requiredAnchors = type === 'horizontal' || type === 'text' ? 1 : 2;
   if (!Array.isArray(anchors) || anchors.length !== requiredAnchors) {
     throw new TypeError(`${type} requires ${requiredAnchors} anchor(s)`);
   }
@@ -64,6 +79,7 @@ export function createDrawing(type, anchors, options = {}) {
   if (type === 'fibonacci') {
     drawing.levels = parseFibonacciLevels(options.levels ?? DEFAULT_FIBONACCI_LEVELS);
   }
+  if (type === 'text') drawing.text = normalizeDrawingText(options.text);
   return drawing;
 }
 
@@ -83,6 +99,7 @@ export function serializeDrawings(drawings) {
   return drawings.map((drawing) => createDrawing(drawing.type, drawing.anchors, {
     id: drawing.id,
     levels: drawing.levels,
+    text: drawing.text,
     lineWidth: drawing.lineWidth,
     color: drawing.color,
   }));
@@ -92,8 +109,19 @@ export function drawingWithColor(drawing, color) {
   return createDrawing(drawing.type, drawing.anchors, {
     id: drawing.id,
     levels: drawing.levels,
+    text: drawing.text,
     lineWidth: drawing.lineWidth,
     color,
+  });
+}
+
+export function drawingWithText(drawing, text) {
+  if (drawing?.type !== 'text') throw new TypeError('A text drawing is required');
+  return createDrawing('text', drawing.anchors, {
+    id: drawing.id,
+    text,
+    lineWidth: drawing.lineWidth,
+    color: drawing.color,
   });
 }
 
@@ -112,6 +140,36 @@ export function distanceToSegment(point, start, end) {
   if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
   const ratio = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
   return Math.hypot(point.x - (start.x + ratio * dx), point.y - (start.y + ratio * dy));
+}
+
+export function textDrawingLayout(drawing, project, measureText = null) {
+  if (drawing?.type !== 'text') throw new TypeError('A text drawing is required');
+  const anchor = validateAnchor(drawing.anchors?.[0]);
+  const x = project.timeToX(anchor.time);
+  const y = project.priceToY(anchor.price);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const text = normalizeDrawingText(drawing.text);
+  const lines = text.split('\n');
+  const measure = (line) => {
+    const result = measureText?.(line);
+    if (typeof result === 'number') return result;
+    if (Number.isFinite(result?.width)) return result.width;
+    return line.length * 7.2;
+  };
+  const contentWidth = Math.max(1, ...lines.map(measure));
+  const bounds = {
+    x: x + DRAWING_TEXT_STYLE.offsetX,
+    y: y + DRAWING_TEXT_STYLE.offsetY,
+    width: contentWidth + DRAWING_TEXT_STYLE.paddingX * 2,
+    height: lines.length * DRAWING_TEXT_STYLE.lineHeight + DRAWING_TEXT_STYLE.paddingY * 2,
+  };
+  return {
+    anchor: { x, y, anchor },
+    bounds,
+    lines,
+    textX: bounds.x + DRAWING_TEXT_STYLE.paddingX,
+    textY: bounds.y + DRAWING_TEXT_STYLE.paddingY,
+  };
 }
 
 export function projectTimeCoordinate(time, candles, timeToCoordinate, logicalScale = null) {
@@ -190,6 +248,7 @@ export function drawingGeometry(drawing, project, width) {
     const y = Math.min(anchors[0].y, anchors[1].y);
     return { anchors, segments: [], rectangles: [{ x, y, width: Math.abs(anchors[1].x - anchors[0].x), height: Math.abs(anchors[1].y - anchors[0].y) }] };
   }
+  if (drawing.type === 'text') return { anchors, segments: [], rectangles: [] };
   const segments = fibonacciPrices(drawing).map(({ level, price }) => {
     const y = project.priceToY(price);
     return { level, price, start: { x: anchors[0].x, y }, end: { x: anchors[1].x, y } };
@@ -197,7 +256,7 @@ export function drawingGeometry(drawing, project, width) {
   return { anchors, segments, rectangles: [] };
 }
 
-export function hitTestDrawings(drawings, point, project, width, tolerance = 8) {
+export function hitTestDrawings(drawings, point, project, width, tolerance = 8, measureText = null) {
   for (let drawingIndex = drawings.length - 1; drawingIndex >= 0; drawingIndex -= 1) {
     const drawing = drawings[drawingIndex];
     const geometry = drawingGeometry(drawing, project, width);
@@ -212,6 +271,13 @@ export function hitTestDrawings(drawings, point, project, width, tolerance = 8) 
       && (Math.abs(point.x - rect.x) <= tolerance || Math.abs(point.x - rect.x - rect.width) <= tolerance
         || Math.abs(point.y - rect.y) <= tolerance || Math.abs(point.y - rect.y - rect.height) <= tolerance)
     ))) return { drawingId: drawing.id, anchorIndex: null };
+    if (drawing.type === 'text') {
+      const layout = textDrawingLayout(drawing, project, measureText);
+      if (layout && point.x >= layout.bounds.x && point.x <= layout.bounds.x + layout.bounds.width
+        && point.y >= layout.bounds.y && point.y <= layout.bounds.y + layout.bounds.height) {
+        return { drawingId: drawing.id, anchorIndex: null };
+      }
+    }
   }
   return null;
 }

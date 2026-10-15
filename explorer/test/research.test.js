@@ -149,3 +149,21 @@ test('JSON export includes schema version and drawing geometry', () => {
   assert.equal(output.schemaVersion, 1);
   assert.deepEqual(output.records[0].drawings[0].anchors[0], { time: 1100, price: 5140.5 });
 });
+
+test('research persistence round-trips a text drawing without a database schema change', () => {
+  const draft = validDraft();
+  draft.drawings = [{
+    schemaVersion: 1,
+    id: 'text-1',
+    type: 'text',
+    anchors: [{ time: 1100, price: 5140.5 }],
+    text: 'MM21 suporte\nregião negociada',
+    color: '#d8ae62',
+  }];
+  const database = toDatabaseRecord(draft);
+  const restored = fromDatabaseRecord({ id: 'saved-text', author_id: 'user', created_at: 'now', updated_at: 'now', ...database });
+  assert.equal(database.drawings[0].text, draft.drawings[0].text);
+  assert.equal(restored.drawings[0].id, 'text-1');
+  assert.deepEqual(restored.drawings[0].anchors, draft.drawings[0].anchors);
+  assert.equal(restored.drawings[0].color, '#d8ae62');
+});

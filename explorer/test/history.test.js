@@ -65,6 +65,27 @@ test('opening a replay analysis includes its deterministic restoration snapshot'
   });
 });
 
+test('opening a saved analysis restores a market-anchored text annotation', () => {
+  const textDrawing = {
+    schemaVersion: 1,
+    id: 'text-note',
+    type: 'text',
+    anchors: [{ time: 1100, price: 5140.5 }],
+    text: 'MM21 suporte\npossível PB',
+    color: '#70d9d2',
+  };
+  const plan = buildAnalysisRestorePlan({
+    id: 'analysis-with-text', tradingDate: '2026-09-21', timeframeMinutes: 5,
+    startTimestamp: 1000, endTimestamp: 1300, analysisCutoffTimestamp: 1300,
+    drawings: [textDrawing],
+  }, ['2026-09-21']);
+  assert.equal(plan.drawings[0].schemaVersion, 1);
+  assert.equal(plan.drawings[0].id, textDrawing.id);
+  assert.equal(plan.drawings[0].text, textDrawing.text);
+  assert.deepEqual(plan.drawings[0].anchors, textDrawing.anchors);
+  assert.equal(plan.drawings[0].color, textDrawing.color);
+});
+
 test('two-minute analyses are valid restoration targets', () => {
   const plan = buildAnalysisRestorePlan({
     id: 'analysis-2m', tradingDate: '2026-09-21', timeframeMinutes: 2,

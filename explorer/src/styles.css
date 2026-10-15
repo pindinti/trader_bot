@@ -188,6 +188,12 @@ button:disabled { opacity: .38; cursor: not-allowed; }
 .empty-copy { color: #61776b; font-size: 10px; line-height: 1.5; }
 
 .drawing-canvas { position: absolute; z-index: 4; inset: 0; touch-action: none; }
+.drawing-text-editor { position: absolute; z-index: 6; display: grid; gap: 7px; padding: 8px; border: 1px solid #426052; background: rgba(9,24,18,.96); box-shadow: 0 10px 32px rgba(0,0,0,.45); }
+.drawing-text-editor[hidden] { display: none; }
+.drawing-text-editor textarea { width: 100%; min-height: 76px; resize: vertical; padding: 8px; border: 1px solid #2b4437; color: #dce8df; background: #0b1d15; font: 500 12px/1.4 DM Mono, monospace; }
+.drawing-text-editor textarea:focus { outline: 1px solid var(--lime); border-color: var(--lime); }
+.drawing-text-editor div { display: flex; justify-content: flex-end; gap: 6px; }
+.drawing-text-editor button { min-height: 28px; padding: 5px 9px; }
 .history-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); padding: 0; border: 1px solid #365143; color: #dce8df; background: #091912; box-shadow: 0 30px 90px rgba(0,0,0,.65); }
 .history-dialog::backdrop { background: rgba(2,8,5,.78); backdrop-filter: blur(4px); }
 .history-dialog-content { padding: 24px; }

@@ -198,6 +198,7 @@ export function createMarketChart(container, callbacks = {}) {
     deleteSelectedDrawing: drawings.deleteSelected,
     adjustSelectedDrawingLineWidth: drawings.adjustSelectedLineWidth,
     setSelectedDrawingColor: drawings.setSelectedColor,
+    editSelectedDrawingText: drawings.editSelectedText,
     highlightDrawing: drawings.highlightDrawing,
     setSelection: drawings.setSelection,
     getSelection: drawings.getSelection,

@@ -1,17 +1,21 @@
 import {
   DEFAULT_FIBONACCI_LEVELS,
   DRAWING_LINE_WIDTH,
+  DRAWING_TEXT_STYLE,
   createDrawing,
   drawingRenderStyle,
   drawingWithColor,
+  drawingWithText,
   drawingGeometry,
   hitTestDrawings,
+  normalizeDrawingText,
   projectCoordinateTime,
   projectTimeCoordinate,
   serializeDrawings,
+  textDrawingLayout,
 } from './drawings.js';
 
-const DRAW_TOOLS = new Set(['horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle']);
+const DRAW_TOOLS = new Set(['horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle', 'text']);
 const COLORS = {
   selected: 'rgba(215, 237, 98, 0.45)',
   highlighted: 'rgba(243, 201, 105, 0.35)',
@@ -54,6 +58,23 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
   canvas.setAttribute('aria-label', 'Camada de desenhos e seleção de movimento');
   container.append(canvas);
   const context = canvas.getContext('2d');
+  const textEditor = document.createElement('div');
+  textEditor.className = 'drawing-text-editor';
+  textEditor.hidden = true;
+  const textArea = document.createElement('textarea');
+  textArea.rows = 4;
+  textArea.placeholder = 'Escreva uma observação no gráfico';
+  textArea.setAttribute('aria-label', 'Texto da anotação');
+  const textEditorActions = document.createElement('div');
+  const confirmText = document.createElement('button');
+  confirmText.type = 'button';
+  confirmText.textContent = 'Confirmar';
+  const cancelText = document.createElement('button');
+  cancelText.type = 'button';
+  cancelText.textContent = 'Cancelar';
+  textEditorActions.append(confirmText, cancelText);
+  textEditor.append(textArea, textEditorActions);
+  container.append(textEditor);
 
   let drawings = [];
   let selectedId = null;
@@ -66,6 +87,7 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
   let selectionPreview = null;
   let gesture = null;
   let animationFrame = null;
+  let textEditorState = null;
 
   const project = {
     timeToX: (time) => projectTimeCoordinate(
@@ -136,6 +158,14 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     context.stroke();
   }
 
+  function measureTextLine(line) {
+    context.save();
+    context.font = DRAWING_TEXT_STYLE.font;
+    const measurement = context.measureText(line);
+    context.restore();
+    return measurement;
+  }
+
   function drawItem(drawing, temporary = false) {
     const isSelected = drawing.id === selectedId && !temporary;
     const isHighlighted = drawing.id === highlightedId && !temporary;
@@ -148,6 +178,19 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     context.shadowColor = isHighlighted ? COLORS.highlighted : isSelected ? COLORS.selected : 'transparent';
     context.shadowBlur = isHighlighted ? 4 : isSelected ? 3 : 0;
     context.setLineDash(temporary ? [5, 4] : []);
+    if (drawing.type === 'text') {
+      context.font = DRAWING_TEXT_STYLE.font;
+      context.textBaseline = 'top';
+      const layout = textDrawingLayout(drawing, project, measureTextLine);
+      if (layout) {
+        context.fillStyle = isSelected ? 'rgba(9, 24, 18, 0.90)' : 'rgba(9, 24, 18, 0.78)';
+        context.fillRect(layout.bounds.x, layout.bounds.y, layout.bounds.width, layout.bounds.height);
+        context.fillStyle = style.color;
+        layout.lines.forEach((line, index) => {
+          context.fillText(line, layout.textX, layout.textY + index * DRAWING_TEXT_STYLE.lineHeight);
+        });
+      }
+    }
     for (const segment of geometry.segments) {
       context.beginPath();
       context.moveTo(segment.start.x, segment.start.y);
@@ -197,6 +240,7 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     if (DRAW_TOOLS.has(mode) && pendingAnchors.length === 1 && previewAnchor) {
       drawItem(createDrawing(mode, [pendingAnchors[0], previewAnchor], { id: '__preview__', levels: fibonacciLevels }), true);
     }
+    positionTextEditor();
   }
 
   function setSelected(id) {
@@ -207,6 +251,7 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
 
   function setMode(nextMode) {
     if (!['navigate', 'edit', 'selection', ...DRAW_TOOLS].includes(nextMode)) throw new TypeError(`Unsupported chart mode: ${nextMode}`);
+    if (textEditorState) closeTextEditor();
     mode = nextMode;
     pendingAnchors = [];
     previewAnchor = null;
@@ -218,7 +263,88 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     render();
   }
 
+  function positionTextEditor() {
+    if (!textEditorState) return;
+    const x = project.timeToX(textEditorState.anchor.time);
+    const y = project.priceToY(textEditorState.anchor.price);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      textEditor.hidden = true;
+      return;
+    }
+    textEditor.hidden = false;
+    const editorWidth = Math.min(260, Math.max(180, container.clientWidth - 16));
+    const left = Math.max(8, Math.min(container.clientWidth - editorWidth - 8, x + 10));
+    const top = Math.max(8, Math.min(container.clientHeight - 150, y + 10));
+    textEditor.style.width = `${editorWidth}px`;
+    textEditor.style.left = `${left}px`;
+    textEditor.style.top = `${top}px`;
+  }
+
+  function closeTextEditor() {
+    textEditorState = null;
+    textArea.value = '';
+    textArea.setCustomValidity('');
+    textEditor.hidden = true;
+    canvas.style.pointerEvents = mode === 'navigate' ? 'none' : 'auto';
+  }
+
+  function openTextEditor({ anchor, drawing = null }) {
+    textEditorState = {
+      anchor: { ...anchor },
+      drawingId: drawing?.id ?? null,
+      returnMode: drawing ? 'edit' : 'navigate',
+    };
+    textArea.value = drawing?.text ?? '';
+    textArea.setCustomValidity('');
+    canvas.style.pointerEvents = 'none';
+    positionTextEditor();
+    window.requestAnimationFrame(() => {
+      textArea.focus();
+      textArea.setSelectionRange(textArea.value.length, textArea.value.length);
+    });
+  }
+
+  function commitTextEditor() {
+    if (!textEditorState) return false;
+    let text;
+    try {
+      text = normalizeDrawingText(textArea.value);
+    } catch (error) {
+      textArea.setCustomValidity(error.message);
+      textArea.reportValidity();
+      return false;
+    }
+    const editor = { ...textEditorState, anchor: { ...textEditorState.anchor } };
+    let drawing;
+    if (editor.drawingId) {
+      const index = drawings.findIndex((item) => item.id === editor.drawingId);
+      if (index < 0) return false;
+      drawings[index] = drawingWithText(drawings[index], text);
+      drawing = drawings[index];
+    } else {
+      drawing = createDrawing('text', [editor.anchor], { text });
+      drawings.push(drawing);
+    }
+    closeTextEditor();
+    onDrawingsChange?.(serializeDrawings(drawings));
+    setSelected(drawing.id);
+    setMode(editor.returnMode);
+    return true;
+  }
+
+  function cancelTextEditor() {
+    if (!textEditorState) return false;
+    const returnMode = textEditorState.returnMode;
+    closeTextEditor();
+    setMode(returnMode);
+    return true;
+  }
+
   function finishDrawing(anchor) {
+    if (mode === 'text') {
+      openTextEditor({ anchor });
+      return;
+    }
     const anchors = mode === 'horizontal' ? [anchor] : [...pendingAnchors, anchor];
     if (anchors.length < (mode === 'horizontal' ? 1 : 2)) {
       pendingAnchors = anchors;
@@ -250,7 +376,14 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
       return;
     }
     if (mode === 'edit') {
-      const hit = hitTestDrawings(drawings, point, project, container.clientWidth);
+      const hit = hitTestDrawings(
+        drawings,
+        point,
+        project,
+        container.clientWidth,
+        8,
+        measureTextLine,
+      );
       if (!hit) {
         setSelected(null);
         return;
@@ -313,11 +446,31 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
   });
 
   function handleEscape(event) {
-    if (event.key !== 'Escape' || mode === 'navigate') return;
+    if (event.key !== 'Escape') return;
+    if (textEditorState) {
+      event.preventDefault();
+      cancelTextEditor();
+      return;
+    }
+    if (mode === 'navigate') return;
     event.preventDefault();
     setMode('navigate');
   }
   window.addEventListener('keydown', handleEscape);
+  confirmText.addEventListener('click', commitTextEditor);
+  cancelText.addEventListener('click', cancelTextEditor);
+  textArea.addEventListener('input', () => textArea.setCustomValidity(''));
+  textArea.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelTextEditor();
+    } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      event.stopPropagation();
+      commitTextEditor();
+    }
+  });
 
   chart.timeScale().subscribeVisibleLogicalRangeChange(render);
   chart.subscribeCrosshairMove(render);
@@ -336,6 +489,7 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
     getMode: () => mode,
     setFibonacciLevels(levels) { fibonacciLevels = [...levels]; },
     setDrawings(value) {
+      closeTextEditor();
       drawings = serializeDrawings(value);
       highlightedId = null;
       setSelected(null);
@@ -370,6 +524,12 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
       render();
       return true;
     },
+    editSelectedText() {
+      const drawing = drawings.find((item) => item.id === selectedId);
+      if (drawing?.type !== 'text') return false;
+      openTextEditor({ anchor: drawing.anchors[0], drawing });
+      return true;
+    },
     highlightDrawing(id) {
       highlightedId = drawings.some((drawing) => drawing.id === id) ? id : null;
       render();
@@ -383,6 +543,7 @@ export function createDrawingOverlay({ container, chart, series, getCandles, get
       window.removeEventListener('keydown', handleEscape);
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
       canvas.remove();
+      textEditor.remove();
     },
   };
 }

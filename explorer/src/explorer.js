@@ -53,7 +53,7 @@ const elements = Object.fromEntries([
   'contractValue', 'chartContract', 'chartDate', 'chartTimeframe', 'dateSelect', 'timeframeControl',
   'chartState', 'datasetNote', 'candleReference', 'valueOpen', 'valueHigh', 'valueLow', 'valueClose',
   'valueVolume', 'valueTrades', 'drawingTools', 'fibConfig', 'fibLevels', 'selectedDrawing',
-  'deleteDrawing', 'drawingColorPalette', 'decreaseLineWidth', 'increaseLineWidth', 'lineWidthValue', 'selectionStatus', 'openResearch', 'analysisGrid', 'researchPanel', 'researchTitle',
+  'deleteDrawing', 'editDrawingText', 'drawingColorPalette', 'decreaseLineWidth', 'increaseLineWidth', 'lineWidthValue', 'selectionStatus', 'openResearch', 'analysisGrid', 'researchPanel', 'researchTitle',
   'researchKind', 'researchWarningTitle', 'researchWarningText',
   'dirtyState', 'closeResearch', 'researchForm', 'movementSummary', 'analysisCutoff', 'factorList',
   'formErrors', 'saveResearch', 'newResearch', 'deleteResearch', 'saveState', 'savedRecords',
@@ -70,7 +70,7 @@ const FACTORS = [
   ['higher_timeframe', 'Confirmação em tempo maior'], ['candlestick', 'Padrão de candle'],
   ['volume', 'Volume'], ['other', 'Outro'],
 ];
-const DRAWING_LABELS = { horizontal: 'Horizontal', trend: 'Tendência', arrow: 'Seta', fibonacci: 'Fibonacci', rectangle: 'Zona' };
+const DRAWING_LABELS = { horizontal: 'Horizontal', trend: 'Tendência', arrow: 'Seta', fibonacci: 'Fibonacci', rectangle: 'Zona', text: 'Texto' };
 const number = new Intl.NumberFormat('pt-BR');
 const price = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 4 });
 const dateLabel = new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC', weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
@@ -184,8 +184,11 @@ const chart = createMarketChart(mount.querySelector('#chart'), {
   onSelectedChange: (drawing) => {
     elements.selectedDrawing.textContent = drawing ? `${DRAWING_LABELS[drawing.type]} · ${drawing.id.slice(0, 8)}` : 'Nenhum desenho selecionado';
     elements.deleteDrawing.disabled = !drawing;
-    elements.decreaseLineWidth.disabled = !drawing || drawing.lineWidth <= DRAWING_LINE_WIDTH.min;
-    elements.increaseLineWidth.disabled = !drawing || drawing.lineWidth >= DRAWING_LINE_WIDTH.max;
+    const isText = drawing?.type === 'text';
+    elements.editDrawingText.hidden = !isText;
+    elements.editDrawingText.disabled = !isText;
+    elements.decreaseLineWidth.disabled = !drawing || isText || drawing.lineWidth <= DRAWING_LINE_WIDTH.min;
+    elements.increaseLineWidth.disabled = !drawing || isText || drawing.lineWidth >= DRAWING_LINE_WIDTH.max;
     elements.lineWidthValue.textContent = drawing ? price.format(drawing.lineWidth) : price.format(DRAWING_LINE_WIDTH.default);
     drawingColorButtons.forEach((button) => {
       button.disabled = !drawing;
@@ -880,6 +883,7 @@ elements.deleteDrawing.addEventListener('click', () => {
   if (activeRecord && activeRecord.authorId !== state.session?.user.id) return;
   chart.deleteSelectedDrawing();
 });
+elements.editDrawingText.addEventListener('click', () => chart.editSelectedDrawingText());
 elements.decreaseLineWidth.addEventListener('click', () => chart.adjustSelectedDrawingLineWidth(-DRAWING_LINE_WIDTH.step));
 elements.increaseLineWidth.addEventListener('click', () => chart.adjustSelectedDrawingLineWidth(DRAWING_LINE_WIDTH.step));
 elements.drawingColorPalette.addEventListener('click', (event) => {

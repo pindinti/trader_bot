@@ -6,18 +6,21 @@ import {
   DEFAULT_DRAWING_COLOR,
   DRAWING_COLOR_PALETTE,
   DRAWING_LINE_WIDTH,
+  DRAWING_TEXT_STYLE,
   DRAWING_TYPES,
   createDrawing,
   distanceToSegment,
   drawingGeometry,
   drawingRenderStyle,
   drawingWithColor,
+  drawingWithText,
   fibonacciPrices,
   hitTestDrawings,
   parseFibonacciLevels,
   projectCoordinateTime,
   projectTimeCoordinate,
   serializeDrawings,
+  textDrawingLayout,
 } from '../src/drawings.js';
 import { SUPPORTED_TIMEFRAMES } from '../src/aggregate.js';
 import { reprojectLogicalRange } from '../src/chart.js';
@@ -67,9 +70,76 @@ test('configured drawing colors serialize and recolor without changing identity 
   assert.equal(original.color, '#70d9d2');
 });
 
+test('creates a market-anchored text drawing with persisted multiline text and palette color', () => {
+  const drawing = createDrawing('text', [{ time: 1000, price: 10.5 }], {
+    id: 'note-1',
+    text: 'MM21 suporte\r\npossível PB',
+    color: DRAWING_COLOR_PALETTE[2].value,
+  });
+  assert.deepEqual(drawing.anchors, [{ time: 1000, price: 10.5 }]);
+  assert.equal(drawing.text, 'MM21 suporte\npossível PB');
+  assert.equal(drawing.color, '#d8ae62');
+  assert.equal(JSON.stringify(drawing).includes('"x"'), false);
+  assert.equal(JSON.stringify(drawing).includes('"y"'), false);
+  assert.deepEqual(serializeDrawings([drawing])[0], drawing);
+  const recolored = drawingWithColor(drawing, DRAWING_COLOR_PALETTE[4].value);
+  assert.equal(recolored.id, drawing.id);
+  assert.equal(recolored.text, drawing.text);
+  assert.deepEqual(recolored.anchors, drawing.anchors);
+  assert.equal(recolored.color, '#5fa9ef');
+
+  const defaultColor = serializeDrawings([{ ...drawing, color: undefined }])[0];
+  assert.equal(defaultColor.color, DEFAULT_DRAWING_COLOR);
+});
+
+test('rejects empty text and preserves legacy drawing defaults', () => {
+  assert.throws(() => createDrawing('text', [{ time: 1000, price: 10 }], { text: ' \n ' }), /cannot be empty/);
+  assert.throws(() => createDrawing('text', [{ time: 1000, price: 10 }], { text: 42 }), /must be a string/);
+  const legacy = { schemaVersion: 1, id: 'legacy', type: 'trend', anchors: [{ time: 1000, price: 10 }, { time: 1060, price: 11 }] };
+  const restored = serializeDrawings([legacy])[0];
+  assert.deepEqual(restored.anchors, legacy.anchors);
+  assert.equal(restored.id, legacy.id);
+  assert.equal(restored.type, legacy.type);
+  assert.equal(restored.color, DEFAULT_DRAWING_COLOR);
+});
+
+test('editing text or its anchor preserves stable drawing identity and remaining content', () => {
+  const original = createDrawing('text', [{ time: 1000, price: 10 }], {
+    id: 'stable-note', text: 'primeira leitura', color: '#70d9d2',
+  });
+  const edited = drawingWithText(original, 'primeira leitura\nconfirmada');
+  assert.equal(edited.id, original.id);
+  assert.deepEqual(edited.anchors, original.anchors);
+  assert.equal(edited.color, original.color);
+
+  const moved = serializeDrawings([{ ...edited, anchors: [{ time: 1180, price: 12.5 }] }])[0];
+  assert.equal(moved.id, original.id);
+  assert.equal(moved.text, edited.text);
+  assert.deepEqual(moved.anchors, [{ time: 1180, price: 12.5 }]);
+});
+
+test('multiline text hit testing uses rendered bounds rather than only its anchor', () => {
+  const drawing = createDrawing('text', [{ time: 10, price: 20 }], {
+    id: 'hit-note', text: 'linha maior\nlinha 2',
+  });
+  const project = { timeToX: (value) => value, priceToY: (value) => value };
+  const measure = (line) => line.length * 6;
+  const layout = textDrawingLayout(drawing, project, measure);
+  assert.equal(layout.lines.length, 2);
+  assert.equal(layout.bounds.height, 2 * DRAWING_TEXT_STYLE.lineHeight + 2 * DRAWING_TEXT_STYLE.paddingY);
+  assert.deepEqual(
+    hitTestDrawings([drawing], { x: layout.bounds.x + layout.bounds.width - 2, y: layout.bounds.y + layout.bounds.height - 2 }, project, 200, 8, measure),
+    { drawingId: drawing.id, anchorIndex: null },
+  );
+  assert.equal(
+    hitTestDrawings([drawing], { x: layout.bounds.x + layout.bounds.width + 2, y: layout.bounds.y + layout.bounds.height + 2 }, project, 200, 1, measure),
+    null,
+  );
+});
+
 test('drawing handles are exposed only by explicit edit mode', () => {
   assert.equal(drawingHandlesVisible('edit'), true);
-  for (const mode of ['navigate', 'selection', 'horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle']) {
+  for (const mode of ['navigate', 'selection', 'horizontal', 'trend', 'arrow', 'fibonacci', 'rectangle', 'text']) {
     assert.equal(drawingHandlesVisible(mode), false, mode);
   }
 });
@@ -176,12 +246,14 @@ test('all drawing types preserve timestamp and price anchors across every timefr
     ];
 
     for (const type of DRAWING_TYPES) {
-      const drawing = createDrawing(type, type === 'horizontal' ? anchors.slice(0, 1) : anchors, {
+      const oneAnchor = type === 'horizontal' || type === 'text';
+      const drawing = createDrawing(type, oneAnchor ? anchors.slice(0, 1) : anchors, {
         id: `${type}-${timeframe}`,
+        text: type === 'text' ? 'nota' : undefined,
       });
       const geometry = drawingGeometry(drawing, project, 500);
       assert.equal(geometry.anchors[0].x, 5, `${type} ${timeframe}m first anchor`);
-      if (type !== 'horizontal') assert.equal(geometry.anchors[1].x, 45, `${type} ${timeframe}m future anchor`);
+      if (!oneAnchor) assert.equal(geometry.anchors[1].x, 45, `${type} ${timeframe}m future anchor`);
       assert.deepEqual(serializeDrawings([drawing])[0].anchors, drawing.anchors);
     }
   }
